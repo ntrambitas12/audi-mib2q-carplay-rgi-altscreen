@@ -51,6 +51,7 @@ public class BAPBridge {
      * These are intentionally static (no speed/time conversion at runtime).
      */
     private static final int ROUTE_STATE_REROUTING = 5;
+    private static final int MANEUVER_DISPLAY_DISTANCE_M = 305;
     private static final int CITY_DISPLAY_DISTANCE_M = 305;       // ~1000 ft (city/suburban)
     private static final int HIGHWAY_DISPLAY_DISTANCE_M = 1600;   // ~1 mile (highway/freeway)
     private static final int CITY_PREPARE_THRESHOLD_M = 1500;
@@ -75,7 +76,6 @@ public class BAPBridge {
     /* U+25CC DOTTED CIRCLE, not a combining mark or an emoji sequence.
      * Present in VC's supplementary fonts; on-unit fallback still needs testing. */
     private static final String ROUTE_TIME_PREFIX = "\u25CC ";
-    private static final String ROUTE_DOT_SEPARATOR = " \u00b7 ";
 
     /* CarPlay owns FctID 19/20/21/22/46 for the whole active RGI interval. */
     private String latchedPositionText = "";
@@ -995,9 +995,11 @@ public class BAPBridge {
                 || type0 == ManeuverMapper.MT_ARRIVE_END_OF_DIRECTIONS
                 || type0 == ManeuverMapper.MT_ARRIVE_DESTINATION_LEFT
                 || type0 == ManeuverMapper.MT_ARRIVE_DESTINATION_RIGHT);
+            boolean inDisplayDistance = (!hasUsableDistance) || isArrival || (distM <= MANEUVER_DISPLAY_DISTANCE_M);
             int displayDistanceThresholdM = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
             boolean inDisplayDistance = (!hasUsableDistance) || isArrival || (distM <= displayDistanceThresholdM);
             boolean nowApproach = isArrival
+                || (hasUsableDistance ? (distM <= MANEUVER_DISPLAY_DISTANCE_M) : inApproachZone);
                 || (hasUsableDistance ? (distM <= displayDistanceThresholdM) : inApproachZone);
             boolean approachChanged = hasUsableDistance
                 && (nowApproach != inApproachZone)
@@ -1307,41 +1309,16 @@ public class BAPBridge {
 
         /* Preserve the full payload. Decorations are budgeted on EVERY fragment. */
         positionPrefix = positionSuffix = "";
-        String distStr = (idx >= 0 && s.distManeuverM > 0) ? formatTurnDistanceForText(s.distManeuverM) : "";
         if (signPost.length() > 0) {
-            latchedPositionText = (distStr.length() > 0) ? (signPost + ROUTE_DOT_SEPARATOR + distStr) : signPost;
+            latchedPositionText = signPost;
             positionPrefix = ROUTE_SIGN_OPEN;
             positionSuffix = ROUTE_SIGN_CLOSE;
         } else if (turnTo.length() > 0) {
-            latchedPositionText = (distStr.length() > 0) ? (turnTo + ROUTE_DOT_SEPARATOR + distStr) : turnTo;
+            latchedPositionText = turnTo;
             positionPrefix = ROUTE_TURN_PREFIX;
         } else {
             latchedPositionText = normalizeRouteText(s.currentRoad);
         }
-    }
-
-    private String formatTurnDistanceForText(int meters) {
-        if (meters <= 0) return "";
-        FormattedDistance fd = formatDistanceToTurn(meters);
-        if (fd == null || fd.value <= 0) return "";
-        int val = fd.value;
-        int unit = fd.unit;
-        if (unit == 4) { // Miles (val is miles * 10)
-            int whole = val / 10;
-            int frac = val % 10;
-            return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
-        } else if (unit == 3) { // Feet
-            return val + " ft";
-        } else if (unit == 1) { // Kilometers (val is km * 10)
-            int whole = val / 10;
-            int frac = val % 10;
-            return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
-        } else if (unit == 0) { // Meters
-            return val + " m";
-        } else if (unit == 2) { // Yards
-            return val + " yd";
-        }
-        return "";
     }
 
     private void publishRouteTextForMode() {
@@ -2524,6 +2501,7 @@ public class BAPBridge {
         if (manIdx < 0 || s == null || s.mDistance == null || manIdx >= s.mDistance.length) {
             return -1;
         }
+        int policyCap = MANEUVER_DISPLAY_DISTANCE_M;
         int rawStepM = s.mDistance[manIdx];
         boolean isHighway = rawStepM > HIGHWAY_STEP_THRESHOLD_M || (s.mType != null && manIdx < s.mType.length && ManeuverMapper.isHighwayManeuver(s.mType[manIdx]));
         int policyCap = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
