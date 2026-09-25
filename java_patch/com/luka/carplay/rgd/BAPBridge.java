@@ -71,7 +71,13 @@ public class BAPBridge {
     private static final String ROUTE_TEXT_PENDING = "\u2026";
     private static final String ROUTE_SIGN_OPEN = "\u2039";
     private static final String ROUTE_SIGN_CLOSE = "\u203A";
-    private static final String ROUTE_TURN_PREFIX = "\u25CF "; // filled circle + space
+    /* Directional turn arrow prefixes for Virtual Cockpit route text */
+    public static final String ARROW_STRAIGHT     = "\u2191 "; // ↑
+    public static final String ARROW_LEFT         = "\u2190 "; // ←
+    public static final String ARROW_RIGHT        = "\u2192 "; // →
+    public static final String ARROW_SLIGHT_LEFT  = "\u2196 "; // ↖
+    public static final String ARROW_SLIGHT_RIGHT = "\u2197 "; // ↗
+    public static final String ROUTE_TURN_PREFIX  = ARROW_STRAIGHT;
     /* U+25CC DOTTED CIRCLE, not a combining mark or an emoji sequence.
      * Present in VC's supplementary fonts; on-unit fallback still needs testing. */
     private static final String ROUTE_TIME_PREFIX = "\u25CC ";
@@ -417,10 +423,20 @@ public class BAPBridge {
 
     private static boolean isMetricDistanceUnits() {
         try {
+            boolean isMetric;
             int unit = Distance.getSystemUnit();
-            return unit == Distance.KM || unit == Distance.METERS || unit == Distance.NONE;
+            if (unit == Distance.KM || unit == Distance.METERS){
+                isMetric = true;
+            } else {
+                isMetric = false;
+            }
+            return isMetric;
         } catch (Throwable t) {
-            return true;
+            try {
+                String c = java.util.Locale.getDefault().getCountry();
+                if ("US".equalsIgnoreCase(c) || "GB".equalsIgnoreCase(c)) return false;
+            } catch (Throwable t2) { }
+            return false;
         }
     }
 
@@ -1035,7 +1051,6 @@ public class BAPBridge {
                     descriptorSent = true;
                 } else if (hasManeuverList) {
                     if (showManeuver) {
-                        /* Expose next maneuver within display distance (~1000 ft / 305m). */
                         sendManeuvers(s);
                         descriptorSent = true;
                     } else if (shouldClearManeuver) {
@@ -1235,6 +1250,7 @@ public class BAPBridge {
                 } else if (!inDisplayDistance || explicitClear || shouldClearManeuver) {
                     rendererClient.sendClear();
                     lastCrIdx = -1;
+                    lastCrIcon = -1;
                 }
             }
 
@@ -1314,35 +1330,66 @@ public class BAPBridge {
             positionSuffix = ROUTE_SIGN_CLOSE;
         } else if (turnTo.length() > 0) {
             latchedPositionText = (distStr.length() > 0) ? (turnTo + " | " + distStr) : turnTo;
-            positionPrefix = ROUTE_TURN_PREFIX;
+            positionPrefix = getTurnArrowPrefix(s, idx);
         } else {
             String road = normalizeRouteText(s.currentRoad);
             latchedPositionText = (distStr.length() > 0 && road.length() > 0) ? (road + " | " + distStr) : road;
         }
     }
 
+    private String getTurnArrowPrefix(RouteGuidance.State s, int idx) {
+        if (s == null || idx < 0) return ARROW_STRAIGHT;
+        try {
+            int[] mapped = mapManeuver(s, idx);
+            int dir = mapped[1];
+            switch (dir) {
+                case ManeuverMapper.DIR_SLIGHT_LEFT:
+                    return ARROW_SLIGHT_LEFT;
+                case ManeuverMapper.DIR_LEFT:
+                case ManeuverMapper.DIR_SHARP_LEFT:
+                case ManeuverMapper.DIR_UTURN:
+                    return ARROW_LEFT;
+                case ManeuverMapper.DIR_SLIGHT_RIGHT:
+                    return ARROW_SLIGHT_RIGHT;
+                case ManeuverMapper.DIR_RIGHT:
+                case ManeuverMapper.DIR_SHARP_RIGHT:
+                    return ARROW_RIGHT;
+                case ManeuverMapper.DIR_STRAIGHT:
+                default:
+                    return ARROW_STRAIGHT;
+            }
+        } catch (Throwable t) {
+            return ARROW_STRAIGHT;
+        }
+    }
+
     private String formatTurnDistanceForText(int meters) {
         if (meters <= 0) return "";
-        FormattedDistance fd = formatDistanceToTurn(meters);
-        if (fd == null || fd.value <= 0) return "";
-        int val = fd.value;
-        int unit = fd.unit;
-        if (unit == 4) { // Miles (val is miles * 10)
-            int whole = val / 10;
-            int frac = val % 10;
-            return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
-        } else if (unit == 3) { // Feet
-            return val + " ft";
-        } else if (unit == 1) { // Kilometers (val is km * 10)
-            int whole = val / 10;
-            int frac = val % 10;
-            return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
-        } else if (unit == 0) { // Meters
-            return val + " m";
-        } else if (unit == 2) { // Yards
-            return val + " yd";
+        boolean metric = isMetricDistanceUnits();
+        if (metric) {
+            if (meters >= 1000) {
+                int km10 = (meters + 50) / 100;
+                int whole = km10 / 10;
+                int frac = km10 % 10;
+                return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
+            } else {
+                int m = (meters < 100) ? ((meters + 5) / 10 * 10) : ((meters + 25) / 50 * 50);
+                return m + " m";
+            }
+        } else {
+            // US Imperial: feet and miles (1 m = 3.28084 ft)
+            long feet = Math.round(meters * 3.28084);
+            if (feet >= 1000) {
+                int tenths = (int) ((feet + 264) / 528);
+                int whole = tenths / 10;
+                int frac = tenths % 10;
+                return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
+            } else {
+                int ft = (feet < 100) ? (int) ((feet + 5) / 10 * 10) : (int) ((feet + 25) / 50 * 50);
+                if (ft <= 0) ft = 50;
+                return ft + " ft";
+            }
         }
-        return "";
     }
 
     private void publishRouteTextForMode() {
@@ -2348,10 +2395,12 @@ public class BAPBridge {
         return System.currentTimeMillis();
     }
 
+    private static final int TIME_FORMAT_12H = 11;
+
     private static int getHuNavigationTimeFormat() {
         try {
             int v = DateMetric.timeFormat;
-            int bap = (v == 11) ? 1 : 0;
+            int bap = (v == TIME_FORMAT_12H) ? 1 : 0;
             return bap;
         } catch (Throwable t) {
         }

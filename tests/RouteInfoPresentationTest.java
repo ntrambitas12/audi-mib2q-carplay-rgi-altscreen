@@ -83,7 +83,6 @@ public final class RouteInfoPresentationTest {
         equal("native ETA never switches to duration", Integer.valueOf(1), Integer.valueOf(output.timeType));
         check("position never empty during RGI", output.position.length() > 0);
         check("UTF-8 wire budget", output.position.getBytes("UTF-8").length <= 96);
-        check("no synthetic arrow", output.position.indexOf('\u2191') < 0);
         for (int i = 0; i < output.position.length(); i++) {
             char c = output.position.charAt(i);
             if (Character.isHighSurrogate(c)) {
@@ -113,13 +112,13 @@ public final class RouteInfoPresentationTest {
             equal("unknown ETA retains navigation", "\u2039Exit 12: Main Street\u203A",
                 render(bridge, output, state, small, 1).position);
             state.mExitInfo[0] = " \t\n";
-            equal("next road fallback", "\u25CF Main Street", render(bridge, output, state, small, 0).position);
+            equal("next road fallback", "\u2191 Main Street", render(bridge, output, state, small, 0).position);
             state.mAfterRoad[0] = repeat("\u0416", 70);
             String wide = render(bridge, output, state, small, 0).position;
-            check("wide Cyrillic fits pixels before wire limit", wide.startsWith("\u25CF ")
+            check("wide Cyrillic fits pixels before wire limit", wide.startsWith("\u2191 ")
                 && wide.length() > 3 && wide.length() < 20);
             state.mAfterRoad[0] = " \t";
-            equal("maneuver name fallback", "\u25CF Maneuver name", render(bridge, output, state, small, 0).position);
+            equal("maneuver name fallback", "\u2191 Maneuver name", render(bridge, output, state, small, 0).position);
             state.mName[0] = null;
             equal("current road fallback", "Current Road", render(bridge, output, state, small, 0).position);
             state.currentRoad = null;
