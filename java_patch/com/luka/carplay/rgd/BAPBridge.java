@@ -50,6 +50,9 @@ public class BAPBridge {
      * Fixed maneuver thresholds (meters).
      * These are intentionally static (no speed/time conversion at runtime).
      */
+    private static final int ROUTE_STATE_REROUTING = 5;
+    private static final int CITY_DISPLAY_DISTANCE_M = 305;       // ~1000 ft (city/suburban)
+    private static final int HIGHWAY_DISPLAY_DISTANCE_M = 1600;   // ~1 mile (highway/freeway)
     private static final int CITY_PREPARE_THRESHOLD_M = 1500;
     private static final int HIGHWAY_PREPARE_THRESHOLD_M = 3000;
     private static final int HIGHWAY_STEP_THRESHOLD_M = 2000;
@@ -72,6 +75,7 @@ public class BAPBridge {
     /* U+25CC DOTTED CIRCLE, not a combining mark or an emoji sequence.
      * Present in VC's supplementary fonts; on-unit fallback still needs testing. */
     private static final String ROUTE_TIME_PREFIX = "\u25CC ";
+    private static final String ROUTE_DOT_SEPARATOR = " \u00b7 ";
 
     /* CarPlay owns FctID 19/20/21/22/46 for the whole active RGI interval. */
     private String latchedPositionText = "";
@@ -916,21 +920,27 @@ public class BAPBridge {
 
         try {
             /*
-             * Explicit clear: count dropped to 0.  But only treat it as a real clear
-             * if the route itself is inactive (routeState < 1).
+             * Explicit clear: count dropped to 0, or route is inactive/rerouting.
              */
-            boolean explicitClear = ((dirty & RouteGuidance.State.DIRTY_MANEUVER_COUNT) != 0)
+            boolean isRerouting = (s.routeState == ROUTE_STATE_REROUTING);
+            boolean explicitClear = (((dirty & RouteGuidance.State.DIRTY_MANEUVER_COUNT) != 0)
                 && (s.maneuverCount == 0)
-                && (s.routeState <= 0);
+                && (s.routeState <= 0)) || isRerouting;
             int distM = s.distManeuverM;
             int[] idxs = getManeuverIndexList(s);
             boolean hasManeuverList = (idxs != null && idxs.length > 0);
             boolean hasAnyManeuver = (s.maneuverCount > 0);
-            boolean shouldClearManeuver = (s.maneuverCount == 0) && (s.routeState <= 0);
+            boolean shouldClearManeuver = ((s.maneuverCount == 0) && (s.routeState <= 0)) || isRerouting;
 
             int firstIdx = primaryManeuverIndex(s);
             int type0 = (firstIdx >= 0 && s.mType != null && firstIdx < s.mType.length) ? s.mType[firstIdx] : -1;
-            boolean showManeuver = ManeuverMapper.isValidType(type0);
+            boolean showManeuver = ManeuverMapper.isValidType(type0) && !isRerouting;
+
+            if (isRerouting) {
+                lastFirstManeuverIdx = -1;
+                lastFirstManeuverVer = -1;
+                lastFirstRouteGeneration = -1;
+            }
 
             /* Highway-aware prepare thresholds (meters).
              *
@@ -985,8 +995,10 @@ public class BAPBridge {
                 || type0 == ManeuverMapper.MT_ARRIVE_END_OF_DIRECTIONS
                 || type0 == ManeuverMapper.MT_ARRIVE_DESTINATION_LEFT
                 || type0 == ManeuverMapper.MT_ARRIVE_DESTINATION_RIGHT);
+            int displayDistanceThresholdM = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
+            boolean inDisplayDistance = (!hasUsableDistance) || isArrival || (distM <= displayDistanceThresholdM);
             boolean nowApproach = isArrival
-                || (hasUsableDistance ? (distM <= prepareThreshold) : inApproachZone);
+                || (hasUsableDistance ? (distM <= displayDistanceThresholdM) : inApproachZone);
             boolean approachChanged = hasUsableDistance
                 && (nowApproach != inApproachZone)
                 && showManeuver && hasManeuverList;
@@ -1019,13 +1031,12 @@ public class BAPBridge {
             if ((dirty & (RouteGuidance.State.DIRTY_MANEUVER_ICON |
                           RouteGuidance.State.DIRTY_MANEUVER_LIST |
                           RouteGuidance.State.DIRTY_MANEUVER_COUNT)) != 0) {
-                if (explicitClear) {
+                if (explicitClear || !inDisplayDistance) {
                     sendNoSymbol();
                     descriptorSent = true;
                 } else if (hasManeuverList) {
                     if (showManeuver) {
-                        /* Always expose the real next maneuver. Distance affects
-                         * only bargraph/action timing, never icon selection. */
+                        /* Expose next maneuver within display distance (~1000 ft / 305m). */
                         sendManeuvers(s);
                         descriptorSent = true;
                     } else if (shouldClearManeuver) {
@@ -1213,16 +1224,17 @@ public class BAPBridge {
                 }
                 /* Check if rendered maneuver actually changed */
                 boolean iconChanged = false;
-                if ((dirty & crIconMask) != 0) {
-                    if (showManeuver && hasManeuverList && !explicitClear && !shouldClearManeuver) {
+                if (inDisplayDistance && showManeuver && hasManeuverList && !explicitClear && !shouldClearManeuver) {
+                    if ((dirty & crIconMask) != 0) {
                         iconChanged = updateRendererIfChanged(s, bargraphDenominatorM);
                     }
-                }
-                /* Maneuver packets carry initial progress. Replays and distance
-                 * deltas reuse the exact last HUD phase after identity is accepted. */
-                if (!iconChanged && (approachChanged || (dirty &
-                        (crIconMask | RouteGuidance.State.DIRTY_DIST_MAN)) != 0)) {
-                    updateRendererProgress(s, bargraphDenominatorM);
+                    if (!iconChanged && (approachChanged || (dirty &
+                            (crIconMask | RouteGuidance.State.DIRTY_DIST_MAN)) != 0)) {
+                        updateRendererProgress(s, bargraphDenominatorM);
+                    }
+                } else if (!inDisplayDistance || explicitClear || shouldClearManeuver) {
+                    rendererClient.sendClear();
+                    lastCrIdx = -1;
                 }
             }
 
@@ -1295,16 +1307,41 @@ public class BAPBridge {
 
         /* Preserve the full payload. Decorations are budgeted on EVERY fragment. */
         positionPrefix = positionSuffix = "";
+        String distStr = (idx >= 0 && s.distManeuverM > 0) ? formatTurnDistanceForText(s.distManeuverM) : "";
         if (signPost.length() > 0) {
-            latchedPositionText = signPost;
+            latchedPositionText = (distStr.length() > 0) ? (signPost + ROUTE_DOT_SEPARATOR + distStr) : signPost;
             positionPrefix = ROUTE_SIGN_OPEN;
             positionSuffix = ROUTE_SIGN_CLOSE;
         } else if (turnTo.length() > 0) {
-            latchedPositionText = turnTo;
+            latchedPositionText = (distStr.length() > 0) ? (turnTo + ROUTE_DOT_SEPARATOR + distStr) : turnTo;
             positionPrefix = ROUTE_TURN_PREFIX;
         } else {
             latchedPositionText = normalizeRouteText(s.currentRoad);
         }
+    }
+
+    private String formatTurnDistanceForText(int meters) {
+        if (meters <= 0) return "";
+        FormattedDistance fd = formatDistanceToTurn(meters);
+        if (fd == null || fd.value <= 0) return "";
+        int val = fd.value;
+        int unit = fd.unit;
+        if (unit == 4) { // Miles (val is miles * 10)
+            int whole = val / 10;
+            int frac = val % 10;
+            return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
+        } else if (unit == 3) { // Feet
+            return val + " ft";
+        } else if (unit == 1) { // Kilometers (val is km * 10)
+            int whole = val / 10;
+            int frac = val % 10;
+            return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
+        } else if (unit == 0) { // Meters
+            return val + " m";
+        } else if (unit == 2) { // Yards
+            return val + " yd";
+        }
+        return "";
     }
 
     private void publishRouteTextForMode() {
@@ -2487,7 +2524,9 @@ public class BAPBridge {
         if (manIdx < 0 || s == null || s.mDistance == null || manIdx >= s.mDistance.length) {
             return -1;
         }
-        int policyCap = (prepareThresholdM * BARGRAPH_ACTION_PERCENT_OF_PREPARE) / 100;
+        int rawStepM = s.mDistance[manIdx];
+        boolean isHighway = rawStepM > HIGHWAY_STEP_THRESHOLD_M || (s.mType != null && manIdx < s.mType.length && ManeuverMapper.isHighwayManeuver(s.mType[manIdx]));
+        int policyCap = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
         if (policyCap <= 0) return -1;
         int denominator = s.mDistance[manIdx];
         /*
