@@ -51,7 +51,6 @@ public class BAPBridge {
      * These are intentionally static (no speed/time conversion at runtime).
      */
     private static final int ROUTE_STATE_REROUTING = 5;
-    private static final int MANEUVER_DISPLAY_DISTANCE_M = 305;
     private static final int CITY_DISPLAY_DISTANCE_M = 305;       // ~1000 ft (city/suburban)
     private static final int HIGHWAY_DISPLAY_DISTANCE_M = 1600;   // ~1 mile (highway/freeway)
     private static final int CITY_PREPARE_THRESHOLD_M = 1500;
@@ -995,11 +994,9 @@ public class BAPBridge {
                 || type0 == ManeuverMapper.MT_ARRIVE_END_OF_DIRECTIONS
                 || type0 == ManeuverMapper.MT_ARRIVE_DESTINATION_LEFT
                 || type0 == ManeuverMapper.MT_ARRIVE_DESTINATION_RIGHT);
-            boolean inDisplayDistance = (!hasUsableDistance) || isArrival || (distM <= MANEUVER_DISPLAY_DISTANCE_M);
             int displayDistanceThresholdM = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
             boolean inDisplayDistance = (!hasUsableDistance) || isArrival || (distM <= displayDistanceThresholdM);
             boolean nowApproach = isArrival
-                || (hasUsableDistance ? (distM <= MANEUVER_DISPLAY_DISTANCE_M) : inApproachZone);
                 || (hasUsableDistance ? (distM <= displayDistanceThresholdM) : inApproachZone);
             boolean approachChanged = hasUsableDistance
                 && (nowApproach != inApproachZone)
@@ -2501,7 +2498,6 @@ public class BAPBridge {
         if (manIdx < 0 || s == null || s.mDistance == null || manIdx >= s.mDistance.length) {
             return -1;
         }
-        int policyCap = MANEUVER_DISPLAY_DISTANCE_M;
         int rawStepM = s.mDistance[manIdx];
         boolean isHighway = rawStepM > HIGHWAY_STEP_THRESHOLD_M || (s.mType != null && manIdx < s.mType.length && ManeuverMapper.isHighwayManeuver(s.mType[manIdx]));
         int policyCap = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
