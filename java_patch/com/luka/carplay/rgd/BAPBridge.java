@@ -51,7 +51,7 @@ public class BAPBridge {
      * These are intentionally static (no speed/time conversion at runtime).
      */
     private static final int ROUTE_STATE_REROUTING = 5;
-    private static final int CITY_DISPLAY_DISTANCE_M = 305;       // ~1000 ft (city/suburban)
+    private static final int CITY_DISPLAY_DISTANCE_M = 244;       // ~800 ft (city/suburban)
     private static final int HIGHWAY_DISPLAY_DISTANCE_M = 1600;   // ~1 mile (highway/freeway)
     private static final int CITY_PREPARE_THRESHOLD_M = 1500;
     private static final int HIGHWAY_PREPARE_THRESHOLD_M = 3000;
@@ -986,7 +986,7 @@ public class BAPBridge {
                 lastFirstManeuverVer = currentFirstVer;
                 lastFirstRouteGeneration = s.routeGeneration;
             }
-            boolean hasUsableDistance = (distM > 0);
+            boolean hasUsableDistance = (distM >= 0);
             /* Treat arrival types as approach state even with distM==0 so their
              * maneuver-state transition remains Prepare rather than Follow. */
             boolean isArrival = (type0 == ManeuverMapper.MT_ARRIVE_END_OF_NAVIGATION
@@ -1114,7 +1114,8 @@ public class BAPBridge {
                 | RouteGuidance.State.DIRTY_MANEUVER_TEXT
                 | RouteGuidance.State.DIRTY_MANEUVER_LIST
                 | RouteGuidance.State.DIRTY_MANEUVER_ICON
-                | RouteGuidance.State.DIRTY_MANEUVER_COUNT;
+                | RouteGuidance.State.DIRTY_MANEUVER_COUNT
+                | RouteGuidance.State.DIRTY_DIST_MAN;
             if (infoPhase != 0) {
                 routeTextDirty |= RouteGuidance.State.DIRTY_DIST_DEST
                     | RouteGuidance.State.DIRTY_TIME_REMAINING
@@ -1306,16 +1307,42 @@ public class BAPBridge {
 
         /* Preserve the full payload. Decorations are budgeted on EVERY fragment. */
         positionPrefix = positionSuffix = "";
+        String distStr = (idx >= 0 && s.distManeuverM > 0) ? formatTurnDistanceForText(s.distManeuverM) : "";
         if (signPost.length() > 0) {
-            latchedPositionText = signPost;
+            latchedPositionText = (distStr.length() > 0) ? (signPost + " | " + distStr) : signPost;
             positionPrefix = ROUTE_SIGN_OPEN;
             positionSuffix = ROUTE_SIGN_CLOSE;
         } else if (turnTo.length() > 0) {
-            latchedPositionText = turnTo;
+            latchedPositionText = (distStr.length() > 0) ? (turnTo + " | " + distStr) : turnTo;
             positionPrefix = ROUTE_TURN_PREFIX;
         } else {
-            latchedPositionText = normalizeRouteText(s.currentRoad);
+            String road = normalizeRouteText(s.currentRoad);
+            latchedPositionText = (distStr.length() > 0 && road.length() > 0) ? (road + " | " + distStr) : road;
         }
+    }
+
+    private String formatTurnDistanceForText(int meters) {
+        if (meters <= 0) return "";
+        FormattedDistance fd = formatDistanceToTurn(meters);
+        if (fd == null || fd.value <= 0) return "";
+        int val = fd.value;
+        int unit = fd.unit;
+        if (unit == 4) { // Miles (val is miles * 10)
+            int whole = val / 10;
+            int frac = val % 10;
+            return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
+        } else if (unit == 3) { // Feet
+            return val + " ft";
+        } else if (unit == 1) { // Kilometers (val is km * 10)
+            int whole = val / 10;
+            int frac = val % 10;
+            return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
+        } else if (unit == 0) { // Meters
+            return val + " m";
+        } else if (unit == 2) { // Yards
+            return val + " yd";
+        }
+        return "";
     }
 
     private void publishRouteTextForMode() {

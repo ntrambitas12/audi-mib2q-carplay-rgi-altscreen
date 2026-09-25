@@ -1425,9 +1425,7 @@ static bool rgd_message_handler(hook_context_t* ctx, const iap2_frame_t* frame) 
                     rgd_cancel_pending_zero_locked("route_state>0", upd.route_state);
                 }
                 if (upd.route_state == RGD_STATE_REROUTING && prev_state != RGD_STATE_REROUTING) {
-                    LOG_INFO(LOG_MODULE, "Reroute state entered (%u->5): resetting maneuver slots", prev_state);
-                    rgd_maneuver_map_reset();
-                    rgd_update_cache_reset();
+                    LOG_INFO(LOG_MODULE, "Reroute state entered (%u->5)", prev_state);
                 }
                 g_rgd.emitted_route_state = upd.route_state;
             }
