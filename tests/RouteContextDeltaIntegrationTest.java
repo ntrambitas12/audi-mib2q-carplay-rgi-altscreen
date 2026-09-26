@@ -156,6 +156,20 @@ public final class RouteContextDeltaIntegrationTest {
         }
     }
 
+    private static void permute(int[] arr, int k, List result) {
+        if (k == arr.length) {
+            int[] copy = new int[arr.length];
+            System.arraycopy(arr, 0, copy, 0, arr.length);
+            result.add(copy);
+            return;
+        }
+        for (int i = k; i < arr.length; i++) {
+            int temp = arr[k]; arr[k] = arr[i]; arr[i] = temp;
+            permute(arr, k + 1, result);
+            temp = arr[k]; arr[k] = arr[i]; arr[i] = temp;
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         Log.setLevel(-1);
 
@@ -812,6 +826,326 @@ public final class RouteContextDeltaIntegrationTest {
             check(ScreenModule.isNavActive(), "S16: approach active");
         }
 
-        System.out.println("RouteContextDeltaIntegrationTest: ALL 16 END-TO-END SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Suite 17: Same-generation maneuver replacement with index/list reordering
+        // ============================================================
+        {
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = createBridge(renderer);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:500\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:3\n" +
+                "maneuver_list:s:0,1,2\n" +
+                "m0_type:n:1\nm0_turn_angle:n:-90\nm0_junction_type:n:0\n" +
+                "m1_type:n:2\nm1_turn_angle:n:90\nm1_junction_type:n:0\n" +
+                "m2_type:n:3\nm2_junction_type:n:0\n" +
+                "dist_maneuver_m:n:200\n");
+
+            check(ScreenModule.isNavActive(), "S17: approach active at 200m");
+            check(collector.count() == 0, "S17: initial approach transition does not request rebind");
+            check(renderer.maneuvers > 0, "S17: initial maneuver rendered");
+            int initialManeuvers = renderer.maneuvers;
+            int initialExitAngle = renderer.lastExitAngle;
+            check(initialExitAngle < 0, "S17: initial exit angle is negative (left turn)");
+
+            // Reorder list to [1, 2, 0]: Slot 1 (right turn) becomes the new primary!
+            feed(rg, parseMethod, state, bridge,
+                "maneuver_list:s:1,2,0\n");
+
+            check(ScreenModule.isNavActive(), "S17: approach remains active after reordering");
+            check(collector.count() == 0, "S17: zero rebinds on same-generation reorder");
+            check(renderer.maneuvers > initialManeuvers, "S17: new primary rendered to renderer");
+            check(renderer.lastExitAngle != initialExitAngle, "S17: renderer exit angle updated to slot 1");
+            check(renderer.lastExitAngle > 0, "S17: slot 1 exit angle is positive (right turn)");
+
+            // Verify old primary (slot 0) never repaints: send a distance tick
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:180\n");
+            check(renderer.lastExitAngle > 0, "S17: primary exit angle remained slot 1 on distance tick");
+        }
+
+        // ============================================================
+        // Suite 18: Dynamic City <-> Highway Flip Without Generation Change
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Gen 550, city type 1 @ 400m (>305m city threshold) -> NOT in approach
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:550\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:400\n");
+            check(!ScreenModule.isNavActive(), "S18: city type 1 @ 400m is outside approach (threshold 305m)");
+
+            // Dynamic update: type becomes highway (8) at the same 400m distance and same generation
+            feed(rg, parseMethod, state, bridge, "m0_type:n:8\n");
+            check(ScreenModule.isNavActive(), "S18: highway type 8 @ 400m enters approach (threshold 1609m)");
+
+            // Distance increases to 1700m (>1609m highway threshold) -> exits approach
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:1700\n");
+            check(!ScreenModule.isNavActive(), "S18: highway type 8 @ 1700m exits approach");
+
+            // Update type to city (type 1) at 1700m -> remains outside approach
+            feed(rg, parseMethod, state, bridge, "m0_type:n:1\n");
+            check(!ScreenModule.isNavActive(), "S18: city type 1 @ 1700m remains outside approach");
+
+            // Distance decreases to 250m (<=305m city threshold) -> enters approach
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:250\n");
+            check(ScreenModule.isNavActive(), "S18: city type 1 @ 250m enters approach");
+        }
+
+        // ============================================================
+        // Suite 19: Lane-guidance Stale Data Across Reroute
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Route A (gen 600) with active lane guidance
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:600\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n" +
+                "lane_guidance_showing:n:1\n" +
+                "lane_guidance_total:n:3\n" +
+                "lane_guidance_index:n:0\n" +
+                "lane_guidance_slot:n:0\n");
+
+            check(state.laneGuidanceShowing == 1, "S19: Route A laneGuidanceShowing is 1");
+            check(state.laneGuidanceSlot == 0, "S19: Route A laneGuidanceSlot is 0");
+            check(state.laneGuidanceTotal == 3, "S19: Route A laneGuidanceTotal is 3");
+
+            // Reroute to Route B (gen 601) with NO lane guidance in packet
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:601\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n");
+
+            check(state.laneGuidanceShowing == -1, "S19: Route B cleared laneGuidanceShowing");
+            check(state.laneGuidanceSlot == -1, "S19: Route B cleared laneGuidanceSlot");
+            check(state.laneGuidanceIndex == -1, "S19: Route B cleared laneGuidanceIndex");
+            check(state.laneGuidanceTotal == -1, "S19: Route B cleared laneGuidanceTotal");
+
+            // Now feed Route B lane guidance
+            feed(rg, parseMethod, state, bridge,
+                "lane_guidance_showing:n:1\n" +
+                "lane_guidance_total:n:4\n" +
+                "lane_guidance_index:n:2\n" +
+                "lane_guidance_slot:n:0\n");
+
+            check(state.laneGuidanceShowing == 1, "S19: Route B received new laneGuidanceShowing");
+            check(state.laneGuidanceTotal == 4, "S19: Route B received new laneGuidanceTotal");
+            check(state.laneGuidanceIndex == 2, "S19: Route B received new laneGuidanceIndex");
+        }
+
+        // ============================================================
+        // Suite 20: Route Text Stale-state Across Reroute
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Route A (gen 700) with road and destination
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:700\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n" +
+                "current_road:s:Main Street\n" +
+                "destination:s:Airport\n");
+
+            check("Main Street".equals(state.currentRoad), "S20: Route A currentRoad is Main Street");
+            check("Airport".equals(state.destination), "S20: Route A destination is Airport");
+
+            // Reroute to Route B (gen 701) with NO road or destination keys
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:701\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n");
+
+            check(state.currentRoad == null, "S20: Route B cleared currentRoad");
+            check(state.destination == null, "S20: Route B cleared destination");
+
+            // Now feed Route B road and destination
+            feed(rg, parseMethod, state, bridge,
+                "current_road:s:Oak Avenue\n" +
+                "destination:s:Home\n");
+
+            check("Oak Avenue".equals(state.currentRoad), "S20: Route B received Oak Avenue");
+            check("Home".equals(state.destination), "S20: Route B received Home");
+        }
+
+        // ============================================================
+        // Suite 21: Exhaustive 120-Permutation Field Arrival Order
+        // ============================================================
+        {
+            String[] fields = new String[]{
+                "maneuver_count:n:1\n",
+                "maneuver_list:s:0\n",
+                "m0_type:n:1\n",
+                "m0_turn_angle:n:90\nm0_junction_type:n:0\n",
+                "dist_maneuver_m:n:200\n"
+            };
+            List permutations = new ArrayList();
+            permute(new int[]{0, 1, 2, 3, 4}, 0, permutations);
+            check(permutations.size() == 120, "S21: exactly 120 permutations (5!)");
+
+            for (int i = 0; i < permutations.size(); i++) {
+                int[] p = (int[]) permutations.get(i);
+                BAPBridge bridge = createBridge(null);
+                RouteGuidance rg = new RouteGuidance();
+                RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+                collector.clear();
+                naf.setBoolean(null, false);
+
+                // Pre-established route session
+                feed(rg, parseMethod, state, bridge, "source_supports_rg:n:1\nroute_generation:n:750\nroute_state:n:1\n");
+
+                // Feed each maneuver field in this permutation's order
+                for (int j = 0; j < p.length; j++) {
+                    feed(rg, parseMethod, state, bridge, fields[p[j]]);
+                }
+
+                // After all 5 fields have arrived, approach MUST be active
+                check(ScreenModule.isNavActive(), "S21 perm " + i + ": approach active after all 5 fields arrive");
+                check(collector.count() == 0, "S21 perm " + i + ": 0 rebinds on initial approach entry");
+            }
+        }
+
+        // ============================================================
+        // Suite 22: Malicious Repeated Stale Old-Generation Packets
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:800\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n");
+
+            check(state.routeGeneration == 800L, "S22: routeGeneration is 800");
+            check(state.distManeuverM == 200, "S22: distManeuverM is 200");
+            check(ScreenModule.isNavActive(), "S22: approach active at 200m");
+
+            long[] staleGens = new long[]{799L, 799L, 750L, 700L, 100L, 50L, 0L};
+            for (int i = 0; i < staleGens.length; i++) {
+                // Attempt to inject malicious reroute, invalid maneuver type, and far distance from older generations
+                feed(rg, parseMethod, state, bridge,
+                    "route_generation:n:" + staleGens[i] + "\n" +
+                    "route_state:n:5\n" +
+                    "maneuver_count:n:0\n" +
+                    "m0_type:n:99\n" +
+                    "dist_maneuver_m:n:5000\n");
+
+                check(state.routeGeneration == 800L, "S22: stale gen " + staleGens[i] + " did not regress routeGeneration");
+                check(state.routeState == 1, "S22: stale gen did not poison routeState");
+                check(state.maneuverCount == 1, "S22: stale gen did not overwrite maneuverCount");
+                check(state.mType[0] == 1, "S22: stale gen did not poison mType[0]");
+                check(state.distManeuverM == 200, "S22: stale gen did not alter distManeuverM");
+                check(ScreenModule.isNavActive(), "S22: approach remained active despite stale flood");
+            }
+
+            // Valid gen 800 distance update
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:800\n" +
+                "dist_maneuver_m:n:180\n");
+            check(state.distManeuverM == 180, "S22: valid gen 800 update applied distManeuverM=180");
+            check(ScreenModule.isNavActive(), "S22: approach active at 180m");
+
+            // Another stale packet from 799
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:799\n" +
+                "dist_maneuver_m:n:3000\n");
+            check(state.distManeuverM == 180, "S22: stale packet 799 dropped, distance kept at 180");
+        }
+
+        // ============================================================
+        // Suite 23: Large Generation Jumps & Arithmetic Overflow Safety
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            long[] jumpGens = new long[]{
+                100L,
+                101L,
+                1000000L,
+                1000001L,
+                Long.MAX_VALUE - 1L,
+                Long.MAX_VALUE
+            };
+
+            for (int i = 0; i < jumpGens.length; i++) {
+                feed(rg, parseMethod, state, bridge,
+                    "source_supports_rg:n:1\n" +
+                    "route_generation:n:" + jumpGens[i] + "\n" +
+                    "route_state:n:1\n" +
+                    "maneuver_count:n:1\n" +
+                    "maneuver_list:s:0\n" +
+                    "m0_type:n:1\n" +
+                    "dist_maneuver_m:n:200\n");
+                check(state.routeGeneration == jumpGens[i],
+                    "S23 jump " + i + ": routeGeneration updated to " + jumpGens[i]);
+                check(ScreenModule.isNavActive(),
+                    "S23 jump " + i + ": approach active");
+            }
+
+            // While at Long.MAX_VALUE, feed Long.MAX_VALUE - 1
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:" + (Long.MAX_VALUE - 1L) + "\n" +
+                "dist_maneuver_m:n:5000\n");
+            check(state.routeGeneration == Long.MAX_VALUE,
+                "S23: Long.MAX_VALUE - 1 dropped as stale against Long.MAX_VALUE");
+            check(state.distManeuverM == 200,
+                "S23: distManeuverM not corrupted by stale Long.MAX_VALUE - 1");
+            check(ScreenModule.isNavActive(),
+                "S23: approach remains active at Long.MAX_VALUE");
+        }
+
+        System.out.println("RouteContextDeltaIntegrationTest: ALL 23 END-TO-END SUITES PASS (" + checks + " checks)");
     }
 }

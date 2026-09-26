@@ -551,7 +551,8 @@ public final class RouteContextStateMachineTest {
                 boolean auth = rnd.nextBoolean();
                 long stateGen = auth ? gen : (gen - 1);
                 int manCount = rnd.nextInt(4) == 0 ? 0 : 1;
-                int mType = rnd.nextInt(3) == 0 ? 8 : 1; // highway vs city
+                int[] testTypes = new int[]{1, 2, 3, 8, 9, 22, 23, 51, 52, 53};
+                int mType = testTypes[rnd.nextInt(testTypes.length)];
                 int dist = rnd.nextInt(6) == 0 ? -1 : rnd.nextInt(2000);
 
                 int preRebinds = collector.count();
@@ -571,7 +572,7 @@ public final class RouteContextStateMachineTest {
                 }
 
                 // INVARIANT 2: A generation change outside approach must never directly request a context rebind
-                boolean isHighway = (mType == 8);
+                boolean isHighway = (mType == 8 || mType == 9 || mType == 22 || mType == 23 || mType == 51 || mType == 52 || mType == 53);
                 int limit = isHighway ? 1600 : 305;
                 if (dist > limit && manCount > 0) {
                     check(newRebinds == 0, "INV2: distance " + dist + " > " + limit + " must not trigger rebind");
@@ -606,7 +607,8 @@ public final class RouteContextStateMachineTest {
                 boolean auth = rnd.nextBoolean();
                 long stateGen = auth ? gen : (gen - 1);
                 int manCount = rnd.nextInt(4) == 0 ? 0 : 1;
-                int mType = rnd.nextInt(3) == 0 ? 8 : 1;
+                int[] testTypes = new int[]{1, 2, 3, 8, 9, 22, 23, 51, 52, 53};
+                int mType = testTypes[rnd.nextInt(testTypes.length)];
                 int dist = rnd.nextInt(6) == 0 ? -1 : rnd.nextInt(2000);
 
                 int preRebinds = collector.count();
@@ -661,7 +663,7 @@ public final class RouteContextStateMachineTest {
             // Route state 5 is rerouting ONLY if authenticated for the current generation
             isRerouting = (rState == 5) && auth;
 
-            boolean isHighway = (mType == 8);
+            boolean isHighway = (mType == 8 || mType == 9 || mType == 22 || mType == 23 || mType == 51 || mType == 52 || mType == 53);
             int baseThreshold = isHighway ? 1600 : 305;
             int effectiveThreshold = inApproach ? (baseThreshold + 50) : baseThreshold;
 

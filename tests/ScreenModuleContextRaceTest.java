@@ -404,6 +404,166 @@ public final class ScreenModuleContextRaceTest {
             synchronized (lock) { setField(ScreenModule.class, sm, "dm", null); }
         }
 
-        System.out.println("ScreenModuleContextRaceTest: ALL 8 CONCURRENCY/RACE SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 9: Start/Stop/Start During the 180 ms Bounce
+        // ============================================================
+        {
+            final ScreenModule smA = new ScreenModule();
+            final ScreenModule smB = new ScreenModule();
+            final TestDisplayManagerHandler dmAHandler = new TestDisplayManagerHandler();
+            dmAHandler.currentContextId = 80;
+            final IDisplayManager dmA = createMockDm(dmAHandler);
+            final TestDisplayManagerHandler dmBHandler = new TestDisplayManagerHandler();
+            dmBHandler.currentContextId = 74;
+            final IDisplayManager dmB = createMockDm(dmBHandler);
+
+            dmAHandler.onBounceAction = new Runnable() {
+                public void run() {
+                    // While worker A is in 180 ms sleep after writing 72:
+                    // Stop Session A and Start Session B in stock context 74
+                    try {
+                        smA.stop();
+                        setField(ScreenModule.class, smB, "enabled", Boolean.TRUE);
+                        synchronized (lock) {
+                            setField(ScreenModule.class, smB, "dm", dmB);
+                            setField(ScreenModule.class, null, "desiredCtx", new Integer(74));
+                            setField(ScreenModule.class, null, "currentCtx", new Integer(74));
+                            setField(ScreenModule.class, null, "navActive", Boolean.FALSE);
+                            lock.notifyAll();
+                        }
+                        startWorker(smB);
+                    } catch (Throwable ignored) {}
+                }
+            };
+
+            setField(ScreenModule.class, smA, "enabled", Boolean.TRUE);
+            synchronized (lock) {
+                setField(ScreenModule.class, smA, "dm", dmA);
+                setField(ScreenModule.class, null, "connected", Boolean.TRUE);
+                setField(ScreenModule.class, null, "navActive", Boolean.TRUE);
+                setField(ScreenModule.class, null, "desiredCtx", new Integer(80));
+                setField(ScreenModule.class, null, "currentCtx", new Integer(80));
+            }
+            startWorker(smA);
+
+            // Initiate rebind in session A
+            ScreenModule.requestClusterContextRebind("rebind-session-A");
+
+            // Wait for bounce sleep to elapse and worker A to exit
+            Thread.sleep(300);
+
+            // Assert: old bounce did NOT write 80 into session B
+            check(!dmBHandler.switchCalls.contains(new Integer(80)),
+                "T9: old bounce 180ms expiry did NOT write ctx 80 into Session B");
+            check(dmBHandler.currentContextId == 74,
+                "T9: Session B cleanly retained stock ctx 74");
+            check(!dmAHandler.switchCalls.contains(new Integer(80)),
+                "T9: Session A worker aborted before writing 80 after stop");
+
+            smB.stop();
+        }
+
+        // ============================================================
+        // Test 10: Pending Rebind Across Connect / Disconnect / Reconnect
+        // ============================================================
+        {
+            ScreenModule sm = new ScreenModule();
+            TestDisplayManagerHandler dmHandler = new TestDisplayManagerHandler();
+            dmHandler.currentContextId = 80;
+            IDisplayManager dm = createMockDm(dmHandler);
+
+            setField(ScreenModule.class, sm, "enabled", Boolean.TRUE);
+            synchronized (lock) {
+                setField(ScreenModule.class, sm, "dm", dm);
+                setField(ScreenModule.class, null, "connected", Boolean.TRUE);
+                setField(ScreenModule.class, null, "navActive", Boolean.TRUE);
+                setField(ScreenModule.class, null, "desiredCtx", new Integer(80));
+                setField(ScreenModule.class, null, "currentCtx", new Integer(80));
+            }
+            startWorker(sm);
+
+            // Session A: route generation rebind arrives
+            ScreenModule.requestClusterContextRebind("session-A-leak-check");
+            check(((Boolean) getField(ScreenModule.class, null, "rebindPending")).booleanValue(),
+                "T10: rebindPending is true in Session A");
+
+            // Session A disconnects / stops before worker consumes it
+            sm.stop();
+            check(!((Boolean) getField(ScreenModule.class, null, "rebindPending")).booleanValue(),
+                "T10: stop() cleared rebindPending");
+            check("".equals(getField(ScreenModule.class, null, "rebindReason")),
+                "T10: stop() cleared rebindReason");
+
+            // Session B starts
+            ScreenModule smB = new ScreenModule();
+            TestDisplayManagerHandler dmBHandler = new TestDisplayManagerHandler();
+            dmBHandler.currentContextId = 74;
+            IDisplayManager dmB = createMockDm(dmBHandler);
+            setField(ScreenModule.class, smB, "enabled", Boolean.TRUE);
+            synchronized (lock) {
+                setField(ScreenModule.class, smB, "dm", dmB);
+                setField(ScreenModule.class, null, "connected", Boolean.TRUE);
+                setField(ScreenModule.class, null, "navActive", Boolean.FALSE);
+                setField(ScreenModule.class, null, "desiredCtx", new Integer(74));
+                setField(ScreenModule.class, null, "currentCtx", new Integer(74));
+            }
+            startWorker(smB);
+
+            // Let worker B run
+            Thread.sleep(100);
+
+            // Assert: Session B is completely clean, no rebind executed from Session A
+            check(!((Boolean) getField(ScreenModule.class, null, "rebindPending")).booleanValue(),
+                "T10: Session B rebindPending remains false");
+            check(dmBHandler.switchCalls.isEmpty(),
+                "T10: zero switchContext calls in Session B from leftover Session A rebind");
+            check(dmBHandler.currentContextId == 74,
+                "T10: Session B currentContextId is 74");
+
+            smB.stop();
+        }
+
+        // ============================================================
+        // Test 11: Physical Context Drifted Before Route-Generation Rebind
+        // ============================================================
+        {
+            ScreenModule sm = new ScreenModule();
+            // Start physical context in 74 (drifted from logical 80)
+            TestDisplayManagerHandler dmHandler = new TestDisplayManagerHandler();
+            dmHandler.currentContextId = 74;
+            IDisplayManager dm = createMockDm(dmHandler);
+
+            setField(ScreenModule.class, sm, "enabled", Boolean.TRUE);
+            synchronized (lock) {
+                setField(ScreenModule.class, sm, "dm", dm);
+                setField(ScreenModule.class, null, "connected", Boolean.TRUE);
+                setField(ScreenModule.class, null, "navActive", Boolean.TRUE);
+                setField(ScreenModule.class, null, "desiredCtx", new Integer(80));
+                setField(ScreenModule.class, null, "currentCtx", new Integer(80));
+            }
+            startWorker(sm);
+
+            // Request route generation rebind while physical context is drifted
+            ScreenModule.requestClusterContextRebind("rebind-on-drifted");
+
+            long deadline = System.currentTimeMillis() + 1000;
+            while (dmHandler.currentContextId != 80 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+
+            // Assert: physical context reconciled to 80 with exactly one 72->80 bounce
+            check(dmHandler.currentContextId == 80,
+                "T11: physical context reconciled to 80");
+            check(dmHandler.switchCalls.size() == 2,
+                "T11: exactly one recovery cycle (calls=" + dmHandler.switchCalls + ")");
+            check(((Integer) dmHandler.switchCalls.get(0)).intValue() == 72,
+                "T11: first call was 72");
+            check(((Integer) dmHandler.switchCalls.get(1)).intValue() == 80,
+                "T11: second call was 80");
+
+            sm.stop();
+        }
+
+        System.out.println("ScreenModuleContextRaceTest: ALL 11 CONCURRENCY/RACE SUITES PASS (" + checks + " checks)");
     }
 }
