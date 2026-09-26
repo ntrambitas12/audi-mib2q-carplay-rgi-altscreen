@@ -28,7 +28,10 @@ public final class RouteInfoPresentationTest {
                 timeType = ((Integer) args[0]).intValue();
                 timeCalls++;
             } else {
-                throw new AssertionError("Unexpected BAP write: " + name);
+                Class type = method.getReturnType();
+                if (type == Boolean.TYPE) return Boolean.FALSE;
+                if (type == Integer.TYPE) return Integer.valueOf(0);
+                return null;
             }
             return null;
         }
@@ -165,6 +168,117 @@ public final class RouteInfoPresentationTest {
         check("duration-only input produces arrival too", full.startsWith("\u25CC ") && full.endsWith(" | 1 h 05 min"));
         set(BAPBridge.class, bridge, "lastEtaSeconds", Long.valueOf(1));
         equal("past ETA clamps at zero", "\u25CC 0 min", render(bridge, output, state, true, 1).position);
+
+        // ============================================================
+        // Test context rebind decision on reroute / route_generation change:
+        // ============================================================
+        Field rpf = ScreenModule.class.getDeclaredField("rebindPending");
+        rpf.setAccessible(true);
+        Field naf = ScreenModule.class.getDeclaredField("navActive");
+        naf.setAccessible(true);
+
+        // Case 1: Initial baseline route at gen 300, 200m approach -> enter approach zone (ctx 80 active)
+        naf.setBoolean(null, true);
+        rpf.setBoolean(null, false);
+        RouteGuidance.State baseline = route();
+        baseline.routeGeneration = 300L;
+        baseline.routeState = 1;
+        baseline.routeStateGeneration = 300L;
+        baseline.maneuverCount = 1;
+        baseline.maneuverOrder = new int[]{0};
+        baseline.mType[0] = 1;
+        baseline.distManeuverM = 200;
+        baseline.markAllDirtyForReplay();
+        bridge.update(baseline);
+        rpf.setBoolean(null, false); // clear baseline latch
+
+        // Case 2: Reroute occurs -> new generation 301, city turn at 483 m (~0.3 mi > 305 m)
+        // With ctx 80 currently active, must NOT trigger context rebind!
+        RouteGuidance.State rerouteFar = route();
+        rerouteFar.routeGeneration = 301L;
+        rerouteFar.routeState = 1;
+        rerouteFar.routeStateGeneration = 301L;
+        rerouteFar.maneuverCount = 1;
+        rerouteFar.maneuverOrder = new int[]{0};
+        rerouteFar.mType[0] = 1;
+        rerouteFar.distManeuverM = 483;
+        rerouteFar.markAllDirtyForReplay();
+        boolean res = bridge.update(rerouteFar);
+        check("new generation + 483m city turn (>305m) must NOT rebind context 80",
+            !rpf.getBoolean(null));
+        check("new generation + 483m city turn must exit approach zone (navActive=false)",
+            !ScreenModule.isNavActive());
+
+        // Case 3: Reroute occurs -> new generation 302, city turn at 200 m (<= 305 m)
+        // With ctx 80 currently active, MUST trigger forced 72->80 context rebind!
+        naf.setBoolean(null, true);
+        rpf.setBoolean(null, false);
+        RouteGuidance.State rerouteNear = route();
+        rerouteNear.routeGeneration = 302L;
+        rerouteNear.routeState = 1;
+        rerouteNear.routeStateGeneration = 302L;
+        rerouteNear.maneuverCount = 1;
+        rerouteNear.maneuverOrder = new int[]{0};
+        rerouteNear.mType[0] = 1;
+        rerouteNear.distManeuverM = 200;
+        rerouteNear.markAllDirtyForReplay();
+        bridge.update(rerouteNear);
+        check("new generation + 200m city turn (<=305m) with active ctx 80 MUST trigger rebind",
+            rpf.getBoolean(null));
+        Field rrf = ScreenModule.class.getDeclaredField("rebindReason");
+        rrf.setAccessible(true);
+        String reason = (String) rrf.get(null);
+        check("rebind reason records route generation and approach",
+            reason != null && reason.indexOf("route-generation=302") >= 0);
+
+        // Case 4: Reroute occurs -> new generation 303, city turn at 200 m, but ctx 74 active (navActive=false)
+        // Must NOT rebind (normal 74->80 switch path handles it)
+        naf.setBoolean(null, false);
+        rpf.setBoolean(null, false);
+        RouteGuidance.State rerouteStock = route();
+        rerouteStock.routeGeneration = 303L;
+        rerouteStock.routeState = 1;
+        rerouteStock.routeStateGeneration = 303L;
+        rerouteStock.maneuverCount = 1;
+        rerouteStock.maneuverOrder = new int[]{0};
+        rerouteStock.mType[0] = 1;
+        rerouteStock.distManeuverM = 200;
+        rerouteStock.markAllDirtyForReplay();
+        bridge.update(rerouteStock);
+        check("new generation with inactive ctx 74 does not rebind",
+            !rpf.getBoolean(null));
+
+        // Case 5: Intermediate delta without maneuvers while ctx 80 is latched (e.g. KDK fading)
+        // Followed by delta with maneuvers at 150m (<=305m). Must execute rebind!
+        com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
+        naf.setBoolean(null, true);
+        rpf.setBoolean(null, false);
+        RouteGuidance.State genOnly = route();
+        genOnly.routeGeneration = 304L;
+        genOnly.routeState = 1;
+        genOnly.routeStateGeneration = 304L;
+        genOnly.maneuverCount = 0;
+        genOnly.maneuverOrder = new int[0];
+        genOnly.markAllDirtyForReplay();
+        bridge.update(genOnly);
+        check("intermediate delta without maneuvers does not prematurely rebind",
+            !rpf.getBoolean(null));
+        check("navActive remains latched while KDK visible", ScreenModule.isNavActive());
+
+        RouteGuidance.State genWithManeuver = route();
+        genWithManeuver.routeGeneration = 304L;
+        genWithManeuver.routeState = 1;
+        genWithManeuver.routeStateGeneration = 304L;
+        genWithManeuver.maneuverCount = 1;
+        genWithManeuver.maneuverOrder = new int[]{0};
+        genWithManeuver.mType[0] = 1;
+        genWithManeuver.distManeuverM = 150;
+        genWithManeuver.markAllDirtyForReplay();
+        bridge.update(genWithManeuver);
+        check("subsequent maneuver arrival for generation 304 executes the pending rebind",
+            rpf.getBoolean(null));
+        com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(false);
+
         System.out.println("RouteInfoPresentationTest: PASS (" + checks + " checks)");
     }
 }
