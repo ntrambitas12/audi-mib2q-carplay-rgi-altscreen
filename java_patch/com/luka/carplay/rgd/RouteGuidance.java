@@ -867,9 +867,12 @@ public class RouteGuidance implements CarplayBus.Listener {
     private void parse(CarplayBus.Data d) {
         // Dirty means pending publication, not just changed in this frame.
         // Keep failed HUD/renderer updates across subsequent distance-only deltas.
+        boolean routeGenerationChanged = false;
+        long prevGeneration = state.routeGeneration;
         if (d.has("route_generation")) {
             long generation = d.num64("route_generation", -1L);
             if (generation >= 0L && generation != state.routeGeneration) {
+                routeGenerationChanged = true;
                 // Native resets can be hidden by debounce and reuse every slot
                 // version. Reset content before applying this generation's fields,
                 // retaining route authority until the source updates it below.
@@ -998,6 +1001,21 @@ public class RouteGuidance implements CarplayBus.Listener {
                     state.markDirty(State.DIRTY_ROUTE_STATE);
                 }
             }
+        }
+        /*
+         * Reroute recovery: if a new route generation arrived without an explicit route_state field,
+         * and Java was in ROUTE_STATE_REROUTING (5), infer that the reroute calculation has completed
+         * and normalize back to ROUTE_STATE_ROUTE_SET (1). If the incoming delta explicitly contained
+         * route_state (even 5), the source's explicit authority is respected above.
+         */
+        if (routeGenerationChanged
+                && prevGeneration >= 0L
+                && !d.has("route_state")
+                && state.routeState == ROUTE_STATE_REROUTING) {
+            state.routeState = ROUTE_STATE_ROUTE_SET;
+            state.markDirty(State.DIRTY_ROUTE_STATE);
+            Log.i(TAG, "Reroute complete: new route_generation=" + state.routeGeneration
+                + " without explicit route_state while state was REROUTING; normalizing to ROUTE_SET");
         }
         if (d.has("maneuver_state")) {
             int v = d.num("maneuver_state", -1);

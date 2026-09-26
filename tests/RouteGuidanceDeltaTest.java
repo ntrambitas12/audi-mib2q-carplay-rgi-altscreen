@@ -76,6 +76,32 @@ public final class RouteGuidanceDeltaTest {
         check(state.maneuverState==-1 && state.mAfterRoad[0]==null && state.lgIndex[3]==-1 && state.laneGuidanceShowing==-1,
             "new route reused old slot version and inherited route/lane data");
         check(state.dirtyMask!=0 && state.mVer[0]==2 && state.routeGeneration==101,"new generation failed to publish");
+
+        // Test reroute normalization:
+        // 1. Establish route at generation 200 with state 1
+        feed(parse, rg, "route_generation:n:200\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\n");
+        check(state.routeState == 1 && state.routeGeneration == 200, "reroute test baseline");
+
+        // 2. Rerouting begins: routeState becomes 5
+        feed(parse, rg, "route_state:n:5\n");
+        check(state.routeState == 5, "rerouting state entered");
+
+        // 3. New route generation arrives WITHOUT route_state: must normalize to 1 (ROUTE_SET)
+        feed(parse, rg, "route_generation:n:201\nmaneuver_count:n:1\nmaneuver_list:s:0\n");
+        check(state.routeState == 1 && state.routeGeneration == 201, "new generation without route_state normalized 5 to 1");
+
+        // 4. Second rerouting: routeState becomes 5 again
+        feed(parse, rg, "route_state:n:5\n");
+        check(state.routeState == 5, "second rerouting state entered");
+
+        // 5. Explicit route_state:5 in new generation: must preserve explicit 5
+        feed(parse, rg, "route_generation:n:202\nroute_state:n:5\n");
+        check(state.routeState == 5 && state.routeGeneration == 202, "explicit route_state 5 preserved in new generation");
+
+        // 6. Next route generation arrives WITHOUT route_state: must normalize to 1 again
+        feed(parse, rg, "route_generation:n:203\nmaneuver_count:n:1\nmaneuver_list:s:0\n");
+        check(state.routeState == 1 && state.routeGeneration == 203, "subsequent reroute normalized 5 to 1");
+
         System.out.println("RouteGuidanceDeltaTest: delta retention, route lifecycle, slot reuse, generation reset, independent lanes and +/-1000 sentinels PASS");
     }
 }
