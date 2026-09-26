@@ -113,6 +113,10 @@ public final class ScreenModule implements Module {
      *  composition until VC withdraws visibility (Fct44), without a guessed timer. */
     public static void setNavActive(boolean active) {
         synchronized (LOCK) {
+            if (!active) {
+                rebindPending = false;
+                rebindReason = "";
+            }
             navHidePending = !active && navActive
                 && com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
             navActive = active || navHidePending;

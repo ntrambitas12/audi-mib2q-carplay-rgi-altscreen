@@ -591,6 +591,8 @@ public class RouteGuidance implements CarplayBus.Listener {
                 if (bap != null) { bap.onStop(); bap.onRouteEnd(); }
                 rgActive = false;
                 presentationConfirmed = false;
+                lastReboundRouteGeneration = -1L;
+                routeGenerationEstablished = false;
                 /* RGI off -> hide the CarPlay cluster layers (stock ctx 74). */
                 com.luka.carplay.core.ScreenModule.setNavActive(false);
             }
