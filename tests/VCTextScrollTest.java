@@ -184,6 +184,13 @@ public final class VCTextScrollTest {
             }
             equal(first, frame, "reverse ends at first frame");
             check(wait >= 1800, "start hold after reverse");
+            now += wait;
+            frame = scroll.next(now);
+            check(frame != null, "second forward cycle frame ready");
+            fit(frame);
+            scroll.sent(now);
+            wait = scroll.waitMillis(now);
+            check(wait >= 250, "second cycle forward transport rate bound");
         } else equal(-1L, scroll.waitMillis(now), "fitting text has no timer");
     }
     private static void timing() throws Exception {

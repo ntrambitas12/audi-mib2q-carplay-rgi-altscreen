@@ -291,29 +291,23 @@ public final class ScreenModule implements Module {
                 while (dm == null) {
                     try { LOCK.wait(); } catch (InterruptedException e) { /* persistent worker */ }
                 }
-                if (desiredCtx == currentCtx) {
+                if (desiredCtx == CTX_CLUSTER && rebindPending) {
+                    rebindPending = false;
+                    Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
+                } else if (desiredCtx == currentCtx) {
+                    try {
+                        if (desiredCtx == CTX_CLUSTER)
+                            LOCK.wait(CONTEXT_RECONCILE_MS);
+                        else
+                            LOCK.wait();
+                    } catch (InterruptedException e) { /* persistent worker */ }
+                    if (dm == null || desiredCtx != currentCtx) continue;
                     if (desiredCtx == CTX_CLUSTER && rebindPending) {
                         rebindPending = false;
                         Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
                     } else {
-                        try {
-                            if (desiredCtx == CTX_CLUSTER)
-                                LOCK.wait(CONTEXT_RECONCILE_MS);
-                            else
-                                LOCK.wait();
-                        } catch (InterruptedException e) { /* persistent worker */ }
-                        if (dm == null) continue;
-                        if (desiredCtx == currentCtx) {
-                            if (desiredCtx == CTX_CLUSTER && rebindPending) {
-                                rebindPending = false;
-                                Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
-                            } else {
-                                if (desiredCtx != CTX_CLUSTER) continue;
-                                reconcileOnly = true;
-                            }
-                        } else {
-                            continue;
-                        }
+                        if (desiredCtx != CTX_CLUSTER) continue;
+                        reconcileOnly = true;
                     }
                 }
                 target = desiredCtx; d = dm;
@@ -392,12 +386,7 @@ public final class ScreenModule implements Module {
                 }
                 clusterActive = false;
             }
-            synchronized (LOCK) {
-                if (dm == d) {
-                    currentCtx = ctx;
-                    if (ctx == CTX_CLUSTER) rebindPending = false;
-                }
-            }
+            synchronized (LOCK) { if (dm == d) currentCtx = ctx; }
             /* Context composition is now final: replay the last KDK popup geometry so a
              * navActive edge cannot leave planes 98/101/102 at their previous opacity. */
             com.luka.carplay.cluster.ClusterLayerController.reapply();
