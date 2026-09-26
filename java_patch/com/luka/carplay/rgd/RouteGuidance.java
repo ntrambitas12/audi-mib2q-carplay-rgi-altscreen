@@ -60,8 +60,13 @@ public class RouteGuidance implements CarplayBus.Listener {
         }
         if (generation != lastReboundRouteGeneration) {
             lastReboundRouteGeneration = generation;
-            com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
-                "route-generation=" + generation);
+            /* Only rebind if the cluster is actively holding context 80 (approach zone).
+             * When cruising in stock context 74 (!isNavActive()), the normal 74 -> 80
+             * context switch when approaching the maneuver will perform the physical acquisition. */
+            if (com.luka.carplay.core.ScreenModule.isNavActive()) {
+                com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
+                    "route-generation=" + generation);
+            }
         }
     }
 
