@@ -585,6 +585,108 @@ public final class RouteContextStateMachineTest {
             }
         }
 
-        System.out.println("RouteContextStateMachineTest: ALL 15 HOSTILE/DETERMINISTIC SUITES & 10000 FUZZ CYCLES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 16: Property-Based Verification Against Independent Reference Model
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge();
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            IndependentReferenceModel ref = new IndependentReferenceModel();
+            Random rnd = new Random(1337);
+            long gen = 3000L;
+
+            for (int iter = 0; iter < 25000; iter++) {
+                int action = rnd.nextInt(6);
+                if (action == 0) {
+                    gen++;
+                }
+                int rState = rnd.nextInt(3) == 0 ? 5 : (rnd.nextInt(5) == 0 ? 0 : 1);
+                boolean auth = rnd.nextBoolean();
+                long stateGen = auth ? gen : (gen - 1);
+                int manCount = rnd.nextInt(4) == 0 ? 0 : 1;
+                int mType = rnd.nextInt(3) == 0 ? 8 : 1;
+                int dist = rnd.nextInt(6) == 0 ? -1 : rnd.nextInt(2000);
+
+                int preRebinds = collector.count();
+
+                RouteGuidance.State s = createState(gen, rState, manCount, mType, dist);
+                s.routeStateGeneration = stateGen;
+
+                ref.step(gen, rState, auth, manCount, mType, dist);
+                bridge.update(s);
+
+                int postRebinds = collector.count();
+                int newRebinds = postRebinds - preRebinds;
+
+                check(ScreenModule.isNavActive() == ref.navActive,
+                    "T16 step " + iter + ": navActive parity (actual=" + ScreenModule.isNavActive() + " vs ref=" + ref.navActive + ")");
+                check(collector.count() == ref.totalRebinds,
+                    "T16 step " + iter + ": total rebinds parity (actual=" + collector.count() + " vs ref=" + ref.totalRebinds + ")");
+                check((newRebinds > 0) == ref.rebindThisStep,
+                    "T16 step " + iter + ": step rebind occurrence parity");
+                if (ref.rebindThisStep) {
+                    check(collector.lastReason().indexOf("" + gen) >= 0,
+                        "T16 step " + iter + ": rebind reason contains generation " + gen);
+                }
+                boolean actualRerouting = (s.routeState == 5) && (s.routeStateGeneration == s.routeGeneration);
+                check(actualRerouting == ref.isRerouting,
+                    "T16 step " + iter + ": isRerouting parity");
+            }
+        }
+
+        System.out.println("RouteContextStateMachineTest: ALL 16 HOSTILE/DETERMINISTIC SUITES & 35000 FUZZ CYCLES PASS (" + checks + " checks)");
+    }
+
+    private static final class IndependentReferenceModel {
+        long currentGen = -1L;
+        boolean inApproach = false;
+        boolean navActive = false;
+        boolean pendingRebind = false;
+        int totalRebinds = 0;
+        boolean rebindThisStep = false;
+        long reboundGen = -1L;
+        boolean isRerouting = false;
+
+        void step(long gen, int rState, boolean auth, int manCount, int mType, int distM) {
+            rebindThisStep = false;
+            boolean genChanged = (gen >= 0 && gen != currentGen);
+            if (genChanged) {
+                currentGen = gen;
+                inApproach = false;
+                pendingRebind = true;
+            }
+
+            // Route state 5 is rerouting ONLY if authenticated for the current generation
+            isRerouting = (rState == 5) && auth;
+
+            boolean isHighway = (mType == 8);
+            int baseThreshold = isHighway ? 1600 : 305;
+            int effectiveThreshold = inApproach ? (baseThreshold + 50) : baseThreshold;
+
+            boolean hasUsableDistance = (distM >= 0);
+            boolean inDisplayDistance = (!hasUsableDistance) || (distM <= effectiveThreshold);
+
+            boolean hasManeuver = (manCount > 0);
+            boolean nowApproach = hasManeuver && !isRerouting
+                && (hasUsableDistance ? inDisplayDistance : inApproach);
+            inApproach = nowApproach;
+
+            if (pendingRebind) {
+                if (nowApproach) {
+                    if (navActive && currentGen != reboundGen) {
+                        rebindThisStep = true;
+                        totalRebinds++;
+                        reboundGen = currentGen;
+                    }
+                    pendingRebind = false;
+                } else if (!navActive || (hasManeuver && hasUsableDistance)) {
+                    pendingRebind = false;
+                }
+            }
+
+            navActive = nowApproach;
+        }
     }
 }
