@@ -540,7 +540,7 @@ public final class RouteContextStateMachineTest {
             int lastGen = 2000;
             int rebindsForCurrentGen = 0;
 
-            for (int iter = 0; iter < 10000; iter++) {
+            for (int iter = 0; iter < 50000; iter++) {
                 int action = rnd.nextInt(6);
                 if (action == 0) {
                     // New generation bump
@@ -597,7 +597,7 @@ public final class RouteContextStateMachineTest {
             Random rnd = new Random(1337);
             long gen = 3000L;
 
-            for (int iter = 0; iter < 25000; iter++) {
+            for (int iter = 0; iter < 100000; iter++) {
                 int action = rnd.nextInt(6);
                 if (action == 0) {
                     gen++;
@@ -636,7 +636,7 @@ public final class RouteContextStateMachineTest {
             }
         }
 
-        System.out.println("RouteContextStateMachineTest: ALL 16 HOSTILE/DETERMINISTIC SUITES & 35000 FUZZ CYCLES PASS (" + checks + " checks)");
+        System.out.println("RouteContextStateMachineTest: ALL 16 HOSTILE/DETERMINISTIC SUITES & 150000 FUZZ CYCLES PASS (" + checks + " checks)");
     }
 
     private static final class IndependentReferenceModel {

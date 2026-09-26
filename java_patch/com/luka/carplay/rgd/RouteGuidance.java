@@ -842,6 +842,11 @@ public class RouteGuidance implements CarplayBus.Listener {
         long prevGeneration = state.routeGeneration;
         if (d.has("route_generation")) {
             long generation = d.num64("route_generation", -1L);
+            if (generation >= 0L && state.routeGeneration != -1L && generation < state.routeGeneration) {
+                // Stale / out-of-order delta from an older generation. Drop this frame completely
+                // so old maneuvers and distances do not corrupt or regress the active route.
+                return;
+            }
             if (generation >= 0L && generation != state.routeGeneration) {
                 routeGenerationChanged = true;
                 // Native resets can be hidden by debounce and reuse every slot

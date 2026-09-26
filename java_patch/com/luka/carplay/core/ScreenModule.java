@@ -149,6 +149,8 @@ public final class ScreenModule implements Module {
             if (!visible && navHidePending) {
                 navHidePending = false;
                 navActive = false;
+                rebindPending = false;
+                rebindReason = "";
                 release = true;
             }
         }

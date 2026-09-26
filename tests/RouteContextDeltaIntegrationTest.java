@@ -572,6 +572,246 @@ public final class RouteContextDeltaIntegrationTest {
             }
         }
 
-        System.out.println("RouteContextDeltaIntegrationTest: ALL 8 END-TO-END SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Suite 9: Stale / Out-of-Order Generation Delivery
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, true);
+
+            // Establish gen 100 at 200m
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:100\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(state.routeGeneration == 100, "S9.1: gen 100 established");
+
+            // Bump to gen 101 at 200m
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:101\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(state.routeGeneration == 101, "S9.2: gen 101 established");
+            collector.clear();
+
+            // Stale old packet with gen 100 arrives!
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:100\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(state.routeGeneration == 101, "S9.3: out-of-order stale generation 100 must not regress active generation 101");
+        }
+
+        // ============================================================
+        // Suite 10: Late route_state=5 Arriving After Generation & Maneuver
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Gen 201 arrives with maneuver at 200m, but NO route_state
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:201\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(ScreenModule.isNavActive(), "S10.1: enters approach at 200m");
+            check(state.routeStateGeneration == -1L, "S10.1: routeStateGeneration is unauthenticated");
+
+            // Late route_state=5 arrives for gen 201
+            feed(rg, parseMethod, state, bridge, "route_state:n:5\n");
+            check(state.routeState == 5, "S10.2: routeState is 5");
+            check(state.routeStateGeneration == 201L, "S10.2: routeState authenticated for gen 201");
+            check(!ScreenModule.isNavActive(), "S10.2: late route_state 5 legitimately enters rerouting, drops to 74");
+
+            // Recovery: route_state=1 arrives
+            feed(rg, parseMethod, state, bridge, "route_state:n:1\n");
+            check(state.routeState == 1 && state.routeStateGeneration == 201L, "S10.3: state 1 authenticated");
+            check(ScreenModule.isNavActive(), "S10.3: recovered from reroute to active approach");
+        }
+
+        // ============================================================
+        // Suite 11: Generation 300 -> 301 (Reroute) -> 301 (Recovery) -> 302 (No State)
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Gen 300 state 1
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:300\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(ScreenModule.isNavActive(), "S11.1: gen 300 active");
+
+            // Gen 301 explicit state 5
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:301\nroute_state:n:5\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(!ScreenModule.isNavActive(), "S11.2: gen 301 rerouting active");
+
+            // Gen 301 state 1 recovery
+            feed(rg, parseMethod, state, bridge, "route_state:n:1\n");
+            check(ScreenModule.isNavActive(), "S11.3: gen 301 recovered to approach");
+
+            // Gen 302 arrives WITHOUT route_state at 200m
+            feed(rg, parseMethod, state, bridge,
+                "route_generation:n:302\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(state.routeGeneration == 302L, "S11.4: gen 302 active");
+            check(state.routeStateGeneration == -1L, "S11.4: routeStateGeneration reset for gen 302");
+            check(ScreenModule.isNavActive(), "S11.4: gen 302 enters approach normally without stale rerouting");
+        }
+
+        // ============================================================
+        // Suite 12: Incomplete Maneuver Permutations
+        // ============================================================
+        {
+            // Permutation 1: gen -> count -> dist -> type -> list
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            feed(rg, parseMethod, state, bridge, "route_generation:n:501\nroute_state:n:1\n");
+            check(!ScreenModule.isNavActive(), "S12.1: gen+state alone not approach");
+            feed(rg, parseMethod, state, bridge, "maneuver_count:n:1\n");
+            check(!ScreenModule.isNavActive(), "S12.1: count alone not approach");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
+            check(!ScreenModule.isNavActive(), "S12.1: dist without type/list not approach");
+            feed(rg, parseMethod, state, bridge, "m0_type:n:1\n");
+            check(!ScreenModule.isNavActive(), "S12.1: type without list not approach");
+            feed(rg, parseMethod, state, bridge, "maneuver_list:s:0\n");
+            check(ScreenModule.isNavActive(), "S12.1: list completes maneuver -> enters approach");
+
+            // Permutation 2: gen -> list -> dist -> count -> type
+            feed(rg, parseMethod, state, bridge, "route_generation:n:502\n");
+            check(!ScreenModule.isNavActive(), "S12.2: new gen clears approach");
+            feed(rg, parseMethod, state, bridge, "maneuver_list:s:0\n");
+            check(!ScreenModule.isNavActive(), "S12.2: list alone not approach");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
+            check(!ScreenModule.isNavActive(), "S12.2: dist alone not approach");
+            feed(rg, parseMethod, state, bridge, "maneuver_count:n:1\n");
+            check(!ScreenModule.isNavActive(), "S12.2: count alone not approach");
+            feed(rg, parseMethod, state, bridge, "m0_type:n:1\n");
+            check(ScreenModule.isNavActive(), "S12.2: type completes maneuver -> enters approach");
+        }
+
+        // ============================================================
+        // Suite 13: Invalid Maneuver Types
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            int[] invalidTypes = new int[]{-1, 54, 100, 255};
+            for (int i = 0; i < invalidTypes.length; i++) {
+                long gen = 600L + i;
+                feed(rg, parseMethod, state, bridge,
+                    "route_generation:n:" + gen + "\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:"
+                    + invalidTypes[i] + "\ndist_maneuver_m:n:200\n");
+                check(!ScreenModule.isNavActive(), "S13: invalid type " + invalidTypes[i] + " must not enter approach");
+            }
+
+            // Transition from invalid type 54 to valid type 1 at same generation
+            feed(rg, parseMethod, state, bridge, "m0_type:n:1\n");
+            check(ScreenModule.isNavActive(), "S13: updating to valid type enters approach");
+        }
+
+        // ============================================================
+        // Suite 14: All 7 Highway Maneuver Types at Boundaries
+        // ============================================================
+        {
+            int[] highwayTypes = new int[]{8, 9, 22, 23, 51, 52, 53};
+            for (int i = 0; i < highwayTypes.length; i++) {
+                int ht = highwayTypes[i];
+                BAPBridge bridge = createBridge(null);
+                RouteGuidance rg = new RouteGuidance();
+                RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+                collector.clear();
+                naf.setBoolean(null, false);
+                long gen = 700L + i;
+
+                // 1601m: outside approach
+                feed(rg, parseMethod, state, bridge,
+                    "route_generation:n:" + gen + "\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:"
+                    + ht + "\ndist_maneuver_m:n:1601\n");
+                check(!ScreenModule.isNavActive(), "S14 type " + ht + ": 1601m is outside approach");
+
+                // 1600m: enters approach
+                feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:1600\n");
+                check(ScreenModule.isNavActive(), "S14 type " + ht + ": 1600m enters approach");
+
+                // 1650m: retained by 50m hysteresis
+                feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:1650\n");
+                check(ScreenModule.isNavActive(), "S14 type " + ht + ": 1650m retained by hysteresis");
+
+                // 1651m: exits approach
+                feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:1651\n");
+                check(!ScreenModule.isNavActive(), "S14 type " + ht + ": 1651m exits approach");
+            }
+        }
+
+        // ============================================================
+        // Suite 15: Missing route_generation for Entire Route
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Feed route with NO route_generation ever
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
+            check(state.routeGeneration == -1L, "S15.1: routeGeneration remains -1");
+            check(ScreenModule.isNavActive(), "S15.1: approach opens even without route_generation");
+
+            // Reroute occurs
+            feed(rg, parseMethod, state, bridge, "route_state:n:5\n");
+            check(!ScreenModule.isNavActive(), "S15.2: reroute recognized even without generation");
+
+            // Recover
+            feed(rg, parseMethod, state, bridge, "route_state:n:1\n");
+            check(ScreenModule.isNavActive(), "S15.3: recovered to approach");
+        }
+
+        // ============================================================
+        // Suite 16: Dirty-Mask Failure & Sticky Replay
+        // ============================================================
+        {
+            BAPBridge bridge = createBridge(null);
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+            collector.clear();
+            naf.setBoolean(null, false);
+
+            // Send full delta into parser
+            byte[] bytes = ("route_generation:n:900\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n").getBytes("UTF-8");
+            parseMethod.invoke(rg, new Object[]{CarplayBus.parseText(bytes, bytes.length)});
+
+            // Simulate BAPBridge.update() failing or not being called (dirty flags NOT cleared)
+            int dirtyBefore = state.dirtyMask;
+            check(dirtyBefore != 0, "S16: dirty mask populated");
+
+            // Now send a distance-only update
+            byte[] dBytes = "dist_maneuver_m:n:190\n".getBytes("UTF-8");
+            parseMethod.invoke(rg, new Object[]{CarplayBus.parseText(dBytes, dBytes.length)});
+
+            // Check that previous uncommitted dirty flags were preserved!
+            check((state.dirtyMask & RouteGuidance.State.DIRTY_ROUTE_STATE) != 0,
+                "S16: uncommitted DIRTY_ROUTE_STATE preserved across distance update");
+            check((state.dirtyMask & RouteGuidance.State.DIRTY_MANEUVER_LIST) != 0,
+                "S16: uncommitted DIRTY_MANEUVER_LIST preserved across distance update");
+
+            // Now publish succeeds -> dirty flags cleared
+            boolean published = bridge.update(state);
+            if (published) state.clearDirty();
+            check(state.dirtyMask == 0, "S16: dirty mask cleared after successful publish");
+            check(ScreenModule.isNavActive(), "S16: approach active");
+        }
+
+        System.out.println("RouteContextDeltaIntegrationTest: ALL 16 END-TO-END SUITES PASS (" + checks + " checks)");
     }
 }

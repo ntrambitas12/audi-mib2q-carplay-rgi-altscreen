@@ -30,6 +30,12 @@ STOCK_JAR="$TOOLS_DIR/out/MU1316-final.jar"
 BUILD_ID_RAW=${CARPLAY_BUILD_ID:-$(git -C "$PROJECT_DIR" describe --always --dirty 2>/dev/null || echo unknown)}
 BUILD_ID=$(printf '%s' "$BUILD_ID_RAW" | tr -cd 'A-Za-z0-9._-')
 
+if ! docker info >/dev/null 2>&1 && command -v sg >/dev/null 2>&1; then
+  if sg docker -c "docker info" >/dev/null 2>&1; then
+    exec sg docker -c "$0 $*"
+  fi
+fi
+
 echo "=== CarPlay Java Patch Build (Docker $IMG) ==="
 
 docker run --rm \
