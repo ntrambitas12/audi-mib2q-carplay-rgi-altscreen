@@ -45,30 +45,6 @@ public class RouteGuidance implements CarplayBus.Listener {
     private boolean hasRouteUpdate = false;
     private boolean routeWantsActive = false;
 
-    /* Route generation tracking for forced cluster context rebind on reroute */
-    private long lastReboundRouteGeneration = -1L;
-    private boolean routeGenerationEstablished = false;
-
-    private void maybeRebindForRouteGeneration() {
-        if (!presentationConfirmed) return;
-        long generation = state.routeGeneration;
-        if (generation < 0L) return;
-        if (!routeGenerationEstablished) {
-            lastReboundRouteGeneration = generation;
-            routeGenerationEstablished = true;
-            return;
-        }
-        if (generation != lastReboundRouteGeneration) {
-            lastReboundRouteGeneration = generation;
-            /* Only rebind if the cluster is actively holding context 80 (approach zone).
-             * When cruising in stock context 74 (!isNavActive()), the normal 74 -> 80
-             * context switch when approaching the maneuver will perform the physical acquisition. */
-            if (com.luka.carplay.core.ScreenModule.isNavActive()) {
-                com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
-                    "route-generation=" + generation);
-            }
-        }
-    }
 
     /* Renderer readiness is independent of iOS RGI deltas. A tiny dedicated worker advances
      * the cached presentation state on READY/FRAME_READY/death and on a bounded retry tick. */
@@ -155,6 +131,7 @@ public class RouteGuidance implements CarplayBus.Listener {
         /* Route */
         public int routeState = -1;
         public long routeGeneration = -1L;
+        public long routeStateGeneration = -1L;
         public int maneuverState = -1;
         public int maneuverCount = 0;
         public int[] maneuverOrder = null;
@@ -240,6 +217,7 @@ public class RouteGuidance implements CarplayBus.Listener {
         public void reset() {
             routeState = -1;
             routeGeneration = -1L;
+            routeStateGeneration = -1L;
             maneuverState = -1;
             maneuverCount = 0;
             maneuverOrder = null;
@@ -433,8 +411,6 @@ public class RouteGuidance implements CarplayBus.Listener {
             presentationConfirmed = false;
             hasRouteUpdate = false;
             routeWantsActive = false;
-            lastReboundRouteGeneration = -1L;
-            routeGenerationEstablished = false;
             com.luka.carplay.core.ScreenModule.setNavActive(false);
             if (bap != null) {
                 bap.onStop();
@@ -486,8 +462,6 @@ public class RouteGuidance implements CarplayBus.Listener {
             rgActive = false;
             presentationConfirmed = false;
             routeWantsActive = false;
-            lastReboundRouteGeneration = -1L;
-            routeGenerationEstablished = false;
             com.luka.carplay.core.ScreenModule.setNavActive(false);  /* hide layers (stock ctx 74) */
             hasRouteUpdate = false;
             state.reset();
@@ -596,8 +570,6 @@ public class RouteGuidance implements CarplayBus.Listener {
                 if (bap != null) { bap.onStop(); bap.onRouteEnd(); }
                 rgActive = false;
                 presentationConfirmed = false;
-                lastReboundRouteGeneration = -1L;
-                routeGenerationEstablished = false;
                 /* RGI off -> hide the CarPlay cluster layers (stock ctx 74). */
                 com.luka.carplay.core.ScreenModule.setNavActive(false);
             }
@@ -626,9 +598,6 @@ public class RouteGuidance implements CarplayBus.Listener {
                 } else {
                     Log.w(TAG, "RG presentation lost: keeping route state and ctx 80");
                 }
-            }
-            if (presentationConfirmed) {
-                maybeRebindForRouteGeneration();
             }
             if (updatePublished) state.clearDirty();
             if (bap.takePositionScrollChange() || !confirmed) wakePositionScroll();
@@ -859,9 +828,6 @@ public class RouteGuidance implements CarplayBus.Listener {
             presentationConfirmed = confirmed;
             if (confirmed) Log.i(TAG, "RG presentation CONFIRMED from cached snapshot");
         }
-        if (presentationConfirmed) {
-            maybeRebindForRouteGeneration();
-        }
         return !confirmed || !published;
     }
 
@@ -882,6 +848,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 // version. Reset content before applying this generation's fields,
                 // retaining route authority until the source updates it below.
                 state.routeGeneration = generation;
+                state.routeStateGeneration = -1L;
                 state.clearAllManeuverSlots();
                 state.maneuverState = -1;
                 state.maneuverOrder = null;
@@ -995,6 +962,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 state.laneGuidanceIndex = -1;
                 state.laneGuidanceSlot = -1;
                 state.markDirty(State.DIRTY_MANEUVER_ICON | State.DIRTY_MANEUVER_TEXT | State.DIRTY_LANE_GUIDANCE);
+                state.routeStateGeneration = state.routeGeneration;
                 /* Per-slot data (mType, mTurnAngle, etc.) is NOT cleared here.
                  * It is preserved so that when count>0 returns, BAPBridge can
                  * immediately display the correct maneuver icons.
@@ -1005,22 +973,8 @@ public class RouteGuidance implements CarplayBus.Listener {
                     state.routeState = v;
                     state.markDirty(State.DIRTY_ROUTE_STATE);
                 }
+                state.routeStateGeneration = state.routeGeneration;
             }
-        }
-        /*
-         * Reroute recovery: if a new route generation arrived without an explicit route_state field,
-         * and Java was in ROUTE_STATE_REROUTING (5), infer that the reroute calculation has completed
-         * and normalize back to ROUTE_STATE_ROUTE_SET (1). If the incoming delta explicitly contained
-         * route_state (even 5), the source's explicit authority is respected above.
-         */
-        if (routeGenerationChanged
-                && prevGeneration >= 0L
-                && !d.has("route_state")
-                && state.routeState == ROUTE_STATE_REROUTING) {
-            state.routeState = ROUTE_STATE_ROUTE_SET;
-            state.markDirty(State.DIRTY_ROUTE_STATE);
-            Log.i(TAG, "Reroute complete: new route_generation=" + state.routeGeneration
-                + " without explicit route_state while state was REROUTING; normalizing to ROUTE_SET");
         }
         if (d.has("maneuver_state")) {
             int v = d.num("maneuver_state", -1);

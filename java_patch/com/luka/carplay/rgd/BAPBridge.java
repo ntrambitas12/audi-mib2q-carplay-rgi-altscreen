@@ -125,6 +125,8 @@ public class BAPBridge {
     private int lastFirstManeuverIdx = -1;
     private int lastFirstManeuverVer = -1;
     private long lastFirstRouteGeneration = -1L;
+    private long lastProcessedRouteGeneration = -1L;
+    private boolean routeRebindPending = false;
     /* Call-for-action blink phase: true=100%, false=0% */
     private boolean actionBlinkFull = true;
     private final Object distanceToManeuverLock = new Object();
@@ -701,6 +703,8 @@ public class BAPBridge {
             lastFirstManeuverIdx = -1;
             lastFirstManeuverVer = -1;
             lastFirstRouteGeneration = -1L;
+            lastProcessedRouteGeneration = -1L;
+            routeRebindPending = false;
             resetActionBlinkState();
             synchronized (distanceToManeuverLock) {
                 hasLastDistM = false;
@@ -846,6 +850,8 @@ public class BAPBridge {
             lastFirstManeuverIdx = -1;
             lastFirstManeuverVer = -1;
             lastFirstRouteGeneration = -1L;
+            lastProcessedRouteGeneration = -1L;
+            routeRebindPending = false;
         } catch (Exception e) {
             Log.e(TAG, "onStop error", e);
         }
@@ -966,7 +972,8 @@ public class BAPBridge {
             /*
              * Explicit clear: count dropped to 0, or route is inactive/rerouting.
              */
-            boolean isRerouting = (s.routeState == ROUTE_STATE_REROUTING);
+            boolean isRerouting = (s.routeState == ROUTE_STATE_REROUTING)
+                && (s.routeStateGeneration == s.routeGeneration);
             boolean explicitClear = (((dirty & RouteGuidance.State.DIRTY_MANEUVER_COUNT) != 0)
                 && (s.maneuverCount == 0)
                 && (s.routeState <= 0)) || isRerouting;
@@ -1012,9 +1019,16 @@ public class BAPBridge {
              */
             int currentFirstVer = (firstIdx >= 0 && s.mVer != null
                     && firstIdx < s.mVer.length) ? s.mVer[firstIdx] : -1;
+            boolean routeGenerationChanged = (s.routeGeneration >= 0L)
+                && (s.routeGeneration != lastProcessedRouteGeneration);
+            if (routeGenerationChanged) {
+                inApproachZone = false;
+                lastProcessedRouteGeneration = s.routeGeneration;
+                routeRebindPending = true;
+            }
             boolean primaryChanged = (firstIdx != lastFirstManeuverIdx)
                 || (currentFirstVer != lastFirstManeuverVer)
-                || s.routeGeneration != lastFirstRouteGeneration;
+                || (s.routeGeneration != lastFirstRouteGeneration);
             if (primaryChanged) {
                 lastFirstManeuverIdx = firstIdx;
                 lastFirstManeuverVer = currentFirstVer;
@@ -1054,6 +1068,29 @@ public class BAPBridge {
                     startActionBlinkThread();
                 } else {
                     stopActionBlinkThread();
+                }
+            }
+
+            /*
+             * A route-generation change only needs a forced physical rebind when
+             * the NEW route is actually inside the display approach window and
+             * ctx 80 is already logically active.
+             *
+             * If navActive is false, the normal setNavActive(true) path below
+             * performs the 74 -> 80 acquisition.
+             */
+            if (routeRebindPending) {
+                if (nowApproach) {
+                    if (com.luka.carplay.core.ScreenModule.isNavActive()) {
+                        com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
+                            "route-generation=" + s.routeGeneration + ", approach=true");
+                    }
+                    routeRebindPending = false;
+                } else if (!com.luka.carplay.core.ScreenModule.isNavActive()
+                        || (hasManeuverList && hasUsableDistance)) {
+                    /* Distance is known to be outside approach (e.g. 0.3 mi city) or ctx 74 is active:
+                     * cancel the rebind request so it doesn't fire when later entering approach. */
+                    routeRebindPending = false;
                 }
             }
 
