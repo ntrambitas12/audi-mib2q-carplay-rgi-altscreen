@@ -73,12 +73,13 @@ public final class ScreenModule implements Module {
         catch (Throwable t) { return true; }  /* only an explicit G24 value disables the feature */
     }
 
-    /* desiredCtx = target published by start()/stop()/setNavActive(); currentCtx = what the worker last
-     * applied.  Both guarded by LOCK; the single worker switches whenever they differ.
-     * desiredCtx is a pure function of these two (guarded by LOCK):
-     *   !connected         -> 74 (stock)
-     *   connected, no nav  -> 74 (stock native map, no maneuver overlay)
-     *   connected, nav     -> 80 (stock native map + backing + maneuver) */
+    /* desiredCtx = target published by start()/stop()/setNavActive();
+     * currentCtx = what the worker last applied.  Both guarded by LOCK; the single worker switches whenever they differ.
+     * desiredCtx is a pure function of these (guarded by LOCK):
+     *   !connected                        -> 74 (stock)
+     *   connected, no nav                 -> 74 (stock cluster)
+     *   connected, nav active, cruising   -> 74 (stock cluster: speedometer opening hidden, clean native map)
+     *   connected, nav active, approach   -> 80 (CarPlay cluster composition: 98 maneuver, 101/102 backing, 33 stock map) */
     private static int desiredCtx = CTX_STOCK_CLUSTER;
     private static int currentCtx = -1;
     private static volatile boolean connected = false;
@@ -104,6 +105,7 @@ public final class ScreenModule implements Module {
             navActive = active || navHidePending;
         }
         republish();
+        com.luka.carplay.cluster.ClusterLayerController.reapply();
     }
 
     /** Called after the layer controller has applied the received Fct44 visibility.
@@ -343,11 +345,15 @@ public final class ScreenModule implements Module {
                  * restore value here. Return the terminal to the same full 30 Hz rate
                  * used by the live cluster encoder; stock may change it later if it has
                  * an applicable producer. */
-                d.setUpdateRate(TERMINAL_CLUSTER, 0);
-                try {
+                if (!connected) {
+                    d.setUpdateRate(TERMINAL_CLUSTER, 0);
+                    try {
+                        d.switchContext(CTX_STOCK_CLUSTER, TERMINAL_CLUSTER, null);
+                    } finally {
+                        d.setUpdateRate(TERMINAL_CLUSTER, CLUSTER_FPS);
+                    }
+                } else {
                     d.switchContext(CTX_STOCK_CLUSTER, TERMINAL_CLUSTER, null);
-                } finally {
-                    d.setUpdateRate(TERMINAL_CLUSTER, CLUSTER_FPS);
                 }
                 clusterActive = false;
             }
