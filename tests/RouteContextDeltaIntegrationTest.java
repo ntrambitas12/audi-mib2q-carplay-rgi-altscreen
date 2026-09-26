@@ -1009,19 +1009,20 @@ public final class RouteContextDeltaIntegrationTest {
         }
 
         // ============================================================
-        // Suite 21: Exhaustive 120-Permutation Field Arrival Order
+        // Suite 21: Exhaustive 720-Permutation (6!) Individual-Field Arrival Order
         // ============================================================
         {
             String[] fields = new String[]{
                 "maneuver_count:n:1\n",
                 "maneuver_list:s:0\n",
                 "m0_type:n:1\n",
-                "m0_turn_angle:n:90\nm0_junction_type:n:0\n",
+                "m0_turn_angle:n:90\n",
+                "m0_junction_type:n:0\n",
                 "dist_maneuver_m:n:200\n"
             };
             List permutations = new ArrayList();
-            permute(new int[]{0, 1, 2, 3, 4}, 0, permutations);
-            check(permutations.size() == 120, "S21: exactly 120 permutations (5!)");
+            permute(new int[]{0, 1, 2, 3, 4, 5}, 0, permutations);
+            check(permutations.size() == 720, "S21: exactly 720 permutations (6!)");
 
             for (int i = 0; i < permutations.size(); i++) {
                 int[] p = (int[]) permutations.get(i);
@@ -1039,8 +1040,8 @@ public final class RouteContextDeltaIntegrationTest {
                     feed(rg, parseMethod, state, bridge, fields[p[j]]);
                 }
 
-                // After all 5 fields have arrived, approach MUST be active
-                check(ScreenModule.isNavActive(), "S21 perm " + i + ": approach active after all 5 fields arrive");
+                // After all 6 fields have arrived, approach MUST be active
+                check(ScreenModule.isNavActive(), "S21 perm " + i + ": approach active after all 6 fields arrive");
                 check(collector.count() == 0, "S21 perm " + i + ": 0 rebinds on initial approach entry");
             }
         }
