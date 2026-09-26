@@ -532,14 +532,21 @@ public class RouteGuidance implements CarplayBus.Listener {
                     + " maneuver_count=" + state.maneuverCount
                     + " visible_in_app=" + state.visibleInApp
                     + " source_supports_rg=" + state.sourceSupportsRg);
-                /* ctx 80 (black backing + maneuver plane) and the Maps /map URL follow the BAP
-                 * start itself: that is the edge on which the Kombi animates its KDK slot in, so
-                 * waiting for FRAME_READY only left the slot empty next to Maps' own turn card
-                 * (seen 2026-09-21).  presentationConfirmed still tracks renderer/BAP readiness
-                 * for the text hold and position scroll, but no longer gates the context. */
+                /* BAP session start: rgdActive=true enables status text, position scroll, and
+                 * steering-wheel roller click throughout the session.  Context 80 (dial cutout +
+                 * maneuver backing) is NOT opened here — BAPBridge.update() approach-zone ENTER
+                 * opens it only when the vehicle is within 1000 ft AND the renderer is frame-ready.
+                 * presentationConfirmed tracks renderer/BAP readiness for the text hold. */
                 presentationConfirmed = false;
                 rgActive = bap != null && bap.onStart();
-                com.luka.carplay.core.ScreenModule.setNavActive(rgActive);
+                /* RC#4: do NOT call setNavActive(true) here. In the dynamic-context model,
+                 * setNavActive(true) = "open context 80 + dial cutout immediately". That must
+                 * only happen inside BAPBridge.update() approach-zone ENTER, when the vehicle
+                 * is within 1000 ft AND the renderer has a confirmed frame ready.  Calling it
+                 * unconditionally from onStart() success was the root cause of the blank backing
+                 * box: context 80 opened at session start (any distance) before the renderer
+                 * had painted a real maneuver icon.  bap.onStart() already calls
+                 * setNavActive(false) internally, so the false case is already covered. */
                 if (!rgActive) {
                     if (!bapStartPendingLogged) {
                         Log.w(TAG, "RG activation pending: BAP start did not complete; keeping ctx 74");
@@ -787,7 +794,13 @@ public class RouteGuidance implements CarplayBus.Listener {
         if (!rgActive) {
             rgActive = bap.onStart();
             if (!rgActive) return true;
-            com.luka.carplay.core.ScreenModule.setNavActive(true);
+            /* RC#4: do NOT call setNavActive(true) here. The presentation worker has no
+             * knowledge of approach zone state.  After the dynamic context-switching refactor,
+             * opening context 80 from a bap.onStart() retry (when the vehicle is > 1000 ft from
+             * the next turn) results in an empty dial cutout: the renderer is in sendClear state
+             * because approach-zone EXIT already fired, and no subsequent distance update will
+             * re-trigger approach-zone ENTER since the update() path is driven by iOS RGI packets.
+             * Context 80 must only open via approach-zone ENTER inside BAPBridge.update(). */
         }
 
         // FRAME_READY can win the race with the worker's first wake. Rebase

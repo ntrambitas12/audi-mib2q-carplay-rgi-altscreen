@@ -223,6 +223,13 @@ public class BAPBridge {
         blinkDistM = -1;
         blinkBargraphDenominatorM = -1;
         blinkArmed = false;
+        /* RC#1: a reroute or explicit-clear update sets rendererManeuverPending=true but
+         * then skips updateRendererIfChanged (which is the only place that clears it),
+         * because nowApproach=false/explicitClear suppresses the approach paint path.
+         * Resetting here (called from onStart + stopActionBlinkThread) ensures the flag
+         * is clean for every new approach cycle, so updateRendererProgress is never
+         * permanently blocked by a stale latch from a prior reroute. */
+        rendererManeuverPending = false;
     }
 
     private synchronized void updateActionBlinkContext(boolean armed, int distM, int bargraphDenominatorM) {
@@ -1077,7 +1084,13 @@ public class BAPBridge {
             } else {
                 if (!com.luka.carplay.core.ScreenModule.isNavActive()) {
                     if (csRef != null) startCustomRenderer();
-                    boolean rendererOk = (csRef == null || (rendererClient != null && rendererClient.isReady()));
+                    /* RC#2: use customRendererStarted (set only after isFrameReady() + primer
+                     * succeeds inside startCustomRenderer()) rather than the weaker isReady()
+                     * (TCP handshake only, no eglSwapBuffers ACK).  Opening context 80 while
+                     * customRendererStarted=false means the renderer section of update() is skipped
+                     * entirely (guard: rendererClient != null && customRendererStarted), so the
+                     * maneuver icon is never sent and the backing plate shows an empty box. */
+                    boolean rendererOk = (csRef == null) || customRendererStarted;
                     if (rendererOk) {
                         Log.i(TAG, "Approach zone ENTER: reactivating RG for 3D maneuver composition");
                         forceClusterRouteInfoState(true);
@@ -1095,7 +1108,7 @@ public class BAPBridge {
                                | RouteGuidance.State.DIRTY_MANEUVER_STATE
                                | RouteGuidance.State.DIRTY_LANE_GUIDANCE;
                     } else {
-                        Log.w(TAG, "Approach zone ENTER: renderer client not ready, holding context switch");
+                        Log.w(TAG, "Approach zone ENTER: renderer not frame-ready, holding context switch");
                     }
                 }
             }
@@ -1312,6 +1325,9 @@ public class BAPBridge {
                         lastCrIdx = -1;
                         lastCrIcon = -1;
                     }
+                    /* RC#1: clear the pending flag so the next approach-ENTER cycle is
+                     * not permanently blocked on a flag that was set during this reroute/clear. */
+                    synchronized (this) { rendererManeuverPending = false; }
                 }
             }
 
