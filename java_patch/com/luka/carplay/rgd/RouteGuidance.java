@@ -45,6 +45,26 @@ public class RouteGuidance implements CarplayBus.Listener {
     private boolean hasRouteUpdate = false;
     private boolean routeWantsActive = false;
 
+    /* Route generation tracking for forced cluster context rebind on reroute */
+    private long lastReboundRouteGeneration = -1L;
+    private boolean routeGenerationEstablished = false;
+
+    private void maybeRebindForRouteGeneration() {
+        if (!presentationConfirmed) return;
+        long generation = state.routeGeneration;
+        if (generation < 0L) return;
+        if (!routeGenerationEstablished) {
+            lastReboundRouteGeneration = generation;
+            routeGenerationEstablished = true;
+            return;
+        }
+        if (generation != lastReboundRouteGeneration) {
+            lastReboundRouteGeneration = generation;
+            com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
+                "route-generation=" + generation);
+        }
+    }
+
     /* Renderer readiness is independent of iOS RGI deltas. A tiny dedicated worker advances
      * the cached presentation state on READY/FRAME_READY/death and on a bounded retry tick. */
     private final Object presentationLock = new Object();
@@ -408,6 +428,8 @@ public class RouteGuidance implements CarplayBus.Listener {
             presentationConfirmed = false;
             hasRouteUpdate = false;
             routeWantsActive = false;
+            lastReboundRouteGeneration = -1L;
+            routeGenerationEstablished = false;
             com.luka.carplay.core.ScreenModule.setNavActive(false);
             if (bap != null) {
                 bap.onStop();
@@ -459,6 +481,8 @@ public class RouteGuidance implements CarplayBus.Listener {
             rgActive = false;
             presentationConfirmed = false;
             routeWantsActive = false;
+            lastReboundRouteGeneration = -1L;
+            routeGenerationEstablished = false;
             com.luka.carplay.core.ScreenModule.setNavActive(false);  /* hide layers (stock ctx 74) */
             hasRouteUpdate = false;
             state.reset();
@@ -595,6 +619,9 @@ public class RouteGuidance implements CarplayBus.Listener {
                 } else {
                     Log.w(TAG, "RG presentation lost: keeping route state and ctx 80");
                 }
+            }
+            if (presentationConfirmed) {
+                maybeRebindForRouteGeneration();
             }
             if (updatePublished) state.clearDirty();
             if (bap.takePositionScrollChange() || !confirmed) wakePositionScroll();
@@ -824,6 +851,9 @@ public class RouteGuidance implements CarplayBus.Listener {
         if (confirmed != presentationConfirmed) {
             presentationConfirmed = confirmed;
             if (confirmed) Log.i(TAG, "RG presentation CONFIRMED from cached snapshot");
+        }
+        if (presentationConfirmed) {
+            maybeRebindForRouteGeneration();
         }
         return !confirmed || !published;
     }

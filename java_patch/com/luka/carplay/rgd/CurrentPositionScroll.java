@@ -12,6 +12,7 @@ final class CurrentPositionScroll {
     private String directionMark = "";
     private int[] starts = new int[0], ends = new int[0], dwell = new int[0];
     private int frameIndex;
+    private int scrollDirection = 1;
     private String pendingText;
     private boolean pending, fallback;
     boolean missingGlyphs;
@@ -25,6 +26,7 @@ final class CurrentPositionScroll {
         pending = fallback = missingGlyphs = false;
         deadline = lastClock = 0;
         frameIndex = 0;
+        scrollDirection = 1;
     }
 
     boolean configure(String text, String before, String after, boolean reset) {
@@ -48,6 +50,7 @@ final class CurrentPositionScroll {
 
     void restart() {
         frameIndex = 0;
+        scrollDirection = 1;
         pendingText = null;
         pending = true;
         deadline = lastClock = 0;
@@ -175,7 +178,17 @@ final class CurrentPositionScroll {
     String next(long now) {
         if (waitMillis(now) != 0) return null;
         if (!pending) {
-            frameIndex = (frameIndex + 1) % starts.length;
+            if (starts.length > 1) {
+                int next = frameIndex + scrollDirection;
+                if (next >= starts.length) {
+                    scrollDirection = -1;
+                    next = frameIndex - 1;
+                } else if (next < 0) {
+                    scrollDirection = 1;
+                    next = frameIndex + 1;
+                }
+                frameIndex = next;
+            }
             pending = true;
             pendingText = null;
         }

@@ -86,6 +86,18 @@ public final class ScreenModule implements Module {
     private static volatile boolean navActive = false;
     private static volatile boolean rgdActive = false;
     private static boolean navHidePending;
+    private static boolean rebindPending = false;
+    private static String rebindReason = "";
+
+    /** Request a physical 72->80 context acquisition even when desiredCtx == currentCtx == 80.
+     *  Does not alter navActive or desiredCtx. Wakes the worker to re-run applySwitch(). */
+    public static void requestClusterContextRebind(String reason) {
+        synchronized (LOCK) {
+            rebindPending = true;
+            rebindReason = reason != null ? reason : "";
+            LOCK.notifyAll();
+        }
+    }
 
     /** Recompute desiredCtx from connected/navActive and wake the worker. Caller must NOT hold LOCK. */
     private static void republish() {
@@ -261,6 +273,8 @@ public final class ScreenModule implements Module {
             navActive = false;
             navHidePending = false;
             rgdActive = false;
+            rebindPending = false;
+            rebindReason = "";
         }
         republish();
     }
@@ -278,15 +292,29 @@ public final class ScreenModule implements Module {
                     try { LOCK.wait(); } catch (InterruptedException e) { /* persistent worker */ }
                 }
                 if (desiredCtx == currentCtx) {
-                    try {
-                        if (desiredCtx == CTX_CLUSTER)
-                            LOCK.wait(CONTEXT_RECONCILE_MS);
-                        else
-                            LOCK.wait();
-                    } catch (InterruptedException e) { /* persistent worker */ }
-                    if (dm == null || desiredCtx != currentCtx) continue;
-                    if (desiredCtx != CTX_CLUSTER) continue;
-                    reconcileOnly = true;
+                    if (desiredCtx == CTX_CLUSTER && rebindPending) {
+                        rebindPending = false;
+                        Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
+                    } else {
+                        try {
+                            if (desiredCtx == CTX_CLUSTER)
+                                LOCK.wait(CONTEXT_RECONCILE_MS);
+                            else
+                                LOCK.wait();
+                        } catch (InterruptedException e) { /* persistent worker */ }
+                        if (dm == null) continue;
+                        if (desiredCtx == currentCtx) {
+                            if (desiredCtx == CTX_CLUSTER && rebindPending) {
+                                rebindPending = false;
+                                Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
+                            } else {
+                                if (desiredCtx != CTX_CLUSTER) continue;
+                                reconcileOnly = true;
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
                 }
                 target = desiredCtx; d = dm;
             }
@@ -364,7 +392,12 @@ public final class ScreenModule implements Module {
                 }
                 clusterActive = false;
             }
-            synchronized (LOCK) { if (dm == d) currentCtx = ctx; }
+            synchronized (LOCK) {
+                if (dm == d) {
+                    currentCtx = ctx;
+                    if (ctx == CTX_CLUSTER) rebindPending = false;
+                }
+            }
             /* Context composition is now final: replay the last KDK popup geometry so a
              * navActive edge cannot leave planes 98/101/102 at their previous opacity. */
             com.luka.carplay.cluster.ClusterLayerController.reapply();
