@@ -22,6 +22,7 @@ CLASSPATH="$PATCH_JAR:$STOCK_JAR:$TOOLS_DIR/libs/org.osgi.framework-1.10.0.jar:$
     "$PROJECT_DIR/tests/VCTextScrollTest.java" \
     "$PROJECT_DIR/tests/RouteInfoPresentationTest.java" \
     "$PROJECT_DIR/tests/RouteGuidanceDeltaTest.java" \
+    "$PROJECT_DIR/tests/RouteContextStateMachineTest.java" \
     "$PROJECT_DIR/tests/DistanceBargraphChainTest.java" \
     "$PROJECT_DIR/tests/KomoGraphicsStateTest.java" \
     "$PROJECT_DIR/tests/ManeuverChainAudit.java" \
@@ -41,6 +42,7 @@ CLASSPATH="$PATCH_JAR:$STOCK_JAR:$TOOLS_DIR/libs/org.osgi.framework-1.10.0.jar:$
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RouteInfoPresentationTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RendererMapperDirectionTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RouteGuidanceDeltaTest
+"$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RouteContextStateMachineTest
 # This probe loads additional IBM J9 classes reconstructed from the stock JXE.
 # Their invokespecial bytecode is rejected by the HotSpot verifier; disable it
 # only for this isolated host probe. The production patch build is unchanged.

@@ -89,13 +89,29 @@ public final class ScreenModule implements Module {
     private static boolean rebindPending = false;
     private static String rebindReason = "";
 
+    public interface RebindListener {
+        void onClusterContextRebindRequested(String reason);
+    }
+    private static RebindListener rebindListener = null;
+
+    public static void setRebindListener(RebindListener listener) {
+        synchronized (LOCK) {
+            rebindListener = listener;
+        }
+    }
+
     /** Request a physical 72->80 context acquisition even when desiredCtx == currentCtx == 80.
      *  Does not alter navActive or desiredCtx. Wakes the worker to re-run applySwitch(). */
     public static void requestClusterContextRebind(String reason) {
+        RebindListener listener = null;
         synchronized (LOCK) {
             rebindPending = true;
             rebindReason = reason != null ? reason : "";
+            listener = rebindListener;
             LOCK.notifyAll();
+        }
+        if (listener != null) {
+            listener.onClusterContextRebindRequested(reason);
         }
     }
 
