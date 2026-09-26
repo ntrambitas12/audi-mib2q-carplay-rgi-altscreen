@@ -84,6 +84,7 @@ public final class ScreenModule implements Module {
     private static int currentCtx = -1;
     private static volatile boolean connected = false;
     private static volatile boolean navActive = false;
+    private static volatile boolean rgdActive = false;
     private static boolean navHidePending;
 
     /** Recompute desiredCtx from connected/navActive and wake the worker. Caller must NOT hold LOCK. */
@@ -125,6 +126,10 @@ public final class ScreenModule implements Module {
     /** The cluster-layer visibility gate read by CombiMapController.  It follows the confirmed BAP
      *  presentation and, after route end, VC's own KDK withdrawal; never a stray stock KDK bit. */
     public static boolean isNavActive() { return navActive; }
+
+    public static boolean isRgdActive() { return rgdActive; }
+
+    public static void setRgdActive(boolean active) { rgdActive = active; }
 
     /* ------------------------------------------------------------
      * Cluster map view size (Audi View button / NAV_VIEW_SIZE_CHOICE).
@@ -187,7 +192,7 @@ public final class ScreenModule implements Module {
     /** Raw DSI key 40 (left steering-wheel roller press).  SteeringWheelInputModule already gates
      *  this callback to the confirmed VC map tab; the toggle is meaningful only with active RGI. */
     public static void onSteeringWheelOkPressed() {
-        if (!isConnected() || !isNavActive()) return;
+        if (!isConnected() || !isRgdActive()) return;
         InfoModeListener listener = infoModeListener;
         if (listener == null) return;
         listener.onInfoModeToggle();
@@ -227,6 +232,7 @@ public final class ScreenModule implements Module {
             connected = true;
             navActive = false;
             navHidePending = false;
+            rgdActive = false;
             desiredCtx = CTX_STOCK_CLUSTER;
         }
         synchronized (LOCK) {
@@ -254,6 +260,7 @@ public final class ScreenModule implements Module {
             connected = false;
             navActive = false;
             navHidePending = false;
+            rgdActive = false;
         }
         republish();
     }

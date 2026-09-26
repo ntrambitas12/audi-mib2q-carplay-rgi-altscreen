@@ -119,7 +119,6 @@ public class BAPBridge {
     /* Approach mode controls only bargraph/blink timing. The real next-maneuver
      * descriptor remains visible at every distance. */
     private boolean inApproachZone = false;
-    private boolean bapRgActive = false;
     /* Track the primary maneuver's slot identity so we know when iOS
      * actually swapped the head of the list vs. just reordered/extended it.
      * mVer changes when the C hook reassigns a slot to a new iAP2 index. */
@@ -770,7 +769,7 @@ public class BAPBridge {
             Log.i(TAG, "Started (rgType=" + ACTIVE_RGTYPE
                 + ", cr=" + customRendererStarted + ")");
             bapSessionStarted = true;
-            bapRgActive = true;
+            com.luka.carplay.core.ScreenModule.setRgdActive(true);
             /* Keep the VC's empty "---" shell out while route text is pending.
              * Clear the separate FctID 20 layer; never synthesize a text arrow. */
             try {
@@ -783,7 +782,7 @@ public class BAPBridge {
 
         } catch (Throwable e) {
             bapSessionStarted = false;
-            bapRgActive = false;
+            com.luka.carplay.core.ScreenModule.setRgdActive(false);
             clearPositionScroll();
             rollbackFailedStart();
             Log.e(TAG, "onStart error: " + e.getClass().getName() + ": " + e.getMessage());
@@ -797,7 +796,7 @@ public class BAPBridge {
      * shut; engageTakeover/disengageTakeover own that independently. */
     private void rollbackFailedStart() {
         clearPositionScroll();
-        bapRgActive = false;
+        com.luka.carplay.core.ScreenModule.setRgdActive(false);
         try { appConnectorNavi.updateRGStatus(0); } catch (Throwable t) { }
         try { appConnectorNavi.updateActiveRGType(0); } catch (Throwable t) { }
         try { sendNoSymbol(); } catch (Throwable t) { }
@@ -832,8 +831,8 @@ public class BAPBridge {
              * black screen. BAP teardown happens in onShutdown() on real disconnect. */
             stopActionBlinkThread();
             inApproachZone = false;
-            bapRgActive = false;
             com.luka.carplay.core.ScreenModule.setNavActive(false);
+            com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
             infoPhase = 0;
@@ -860,7 +859,6 @@ public class BAPBridge {
 
         try {
             bapSessionStarted = false;
-            bapRgActive = false;
             clearPositionScroll();
             /* Defensive: stop action blink (it's also stopped on approach
              * zone exit, but onShutdown can be called from non-approach
@@ -868,6 +866,7 @@ public class BAPBridge {
             stopActionBlinkThread();
             inApproachZone = false;
             com.luka.carplay.core.ScreenModule.setNavActive(false);
+            com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
             infoPhase = 0;
@@ -1055,7 +1054,7 @@ public class BAPBridge {
              * in the speedometer dial, while keeping the status bar route text active.
              * Dynamically reactivate when entering the approach zone (<= 1000 ft). */
             if (!nowApproach) {
-                if (bapRgActive) {
+                if (com.luka.carplay.core.ScreenModule.isNavActive()) {
                     Log.i(TAG, "Approach zone EXIT: emulating RG deactivation to close cluster cutout");
                     try {
                         appConnectorNavi.updateRGStatus(0);
@@ -1074,27 +1073,30 @@ public class BAPBridge {
                         lastCrIdx = -1;
                         lastCrIcon = -1;
                     }
-                    bapRgActive = false;
                 }
             } else {
-                if (!bapRgActive) {
-                    Log.i(TAG, "Approach zone ENTER: reactivating RG for 3D maneuver composition");
-                    forceClusterRouteInfoState(true);
-                    if (!customRendererStarted && csRef != null) startCustomRenderer();
-                    try {
-                        appConnectorNavi.updateRGStatus(1);
-                        appConnectorNavi.updateActiveRGType(ACTIVE_RGTYPE);
-                        sendFollowStreet();
-                        sendExitView();
-                    } catch (Throwable t) {
-                        Log.w(TAG, "RG reactivation BAP update failed: " + t);
+                if (!com.luka.carplay.core.ScreenModule.isNavActive()) {
+                    if (csRef != null) startCustomRenderer();
+                    boolean rendererOk = (csRef == null || (rendererClient != null && rendererClient.isReady()));
+                    if (rendererOk) {
+                        Log.i(TAG, "Approach zone ENTER: reactivating RG for 3D maneuver composition");
+                        forceClusterRouteInfoState(true);
+                        try {
+                            appConnectorNavi.updateRGStatus(1);
+                            appConnectorNavi.updateActiveRGType(ACTIVE_RGTYPE);
+                            sendFollowStreet();
+                            sendExitView();
+                        } catch (Throwable t) {
+                            Log.w(TAG, "RG reactivation BAP update failed: " + t);
+                        }
+                        com.luka.carplay.core.ScreenModule.setNavActive(true);
+                        dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
+                               | RouteGuidance.State.DIRTY_DIST_MAN
+                               | RouteGuidance.State.DIRTY_MANEUVER_STATE
+                               | RouteGuidance.State.DIRTY_LANE_GUIDANCE;
+                    } else {
+                        Log.w(TAG, "Approach zone ENTER: renderer client not ready, holding context switch");
                     }
-                    com.luka.carplay.core.ScreenModule.setNavActive(true);
-                    bapRgActive = true;
-                    dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
-                           | RouteGuidance.State.DIRTY_DIST_MAN
-                           | RouteGuidance.State.DIRTY_MANEUVER_STATE
-                           | RouteGuidance.State.DIRTY_LANE_GUIDANCE;
                 }
             }
 
@@ -1424,42 +1426,6 @@ public class BAPBridge {
 
     private String formatTurnDistanceForText(int meters) {
         if (meters <= 0) return "";
-        try {
-            FormattedDistance fd = formatDistanceToTurn(meters);
-            if (fd != null && fd.value > 0) {
-                switch (fd.unit) {
-                    case BAP_DIST_UNIT_METERS: // Meters (value is meters * 10)
-                        return (fd.value / BAP_DISTANCE_SCALE_FACTOR) + " m";
-                    case BAP_DIST_UNIT_KILOMETERS: { // Kilometers (value is km * 10)
-                        int whole = fd.value / BAP_DISTANCE_SCALE_FACTOR;
-                        int frac = fd.value % BAP_DISTANCE_SCALE_FACTOR;
-                        return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
-                    }
-                    case BAP_DIST_UNIT_YARDS: // Yards (value is yards * 10)
-                        return (fd.value / BAP_DISTANCE_SCALE_FACTOR) + " yd";
-                    case BAP_DIST_UNIT_FEET: // Feet (value is feet * 10)
-                        return (fd.value / BAP_DISTANCE_SCALE_FACTOR) + " ft";
-                    case BAP_DIST_UNIT_MILES: { // Miles (value is miles * 10)
-                        int whole = fd.value / BAP_DISTANCE_SCALE_FACTOR;
-                        int frac = fd.value % BAP_DISTANCE_SCALE_FACTOR;
-                        return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
-                    }
-                    case BAP_DIST_UNIT_QUARTER_MILES: { // Quarter miles (value is quarter_miles * 10)
-                        int q = fd.value / BAP_DISTANCE_SCALE_FACTOR;
-                        int whole = q / 4;
-                        int rem = q % 4;
-                        if (rem == 0) return whole + " mi";
-                        if (whole == 0) {
-                            if (rem == 1) return "1/4 mi";
-                            if (rem == 2) return "1/2 mi";
-                            if (rem == 3) return "3/4 mi";
-                        }
-                        return whole + " " + rem + "/4 mi";
-                    }
-                }
-            }
-        } catch (Throwable t) {
-        }
         boolean metric = isMetricDistanceUnits();
         if (metric) {
             if (meters >= 1000) {
@@ -1475,10 +1441,10 @@ public class BAPBridge {
             // US Imperial: feet and miles (1 m = 3.28084 ft)
             long feet = Math.round(meters * 3.28084);
             if (feet >= 1000) {
-                int tenths = (int) ((feet + 264) / 528);
+                int tenths = (int) Math.round(feet / 528.0);
                 int whole = tenths / 10;
                 int frac = tenths % 10;
-                return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
+                return whole + "." + frac + " mi";
             } else {
                 int ft = (feet < 100) ? (int) ((feet + 5) / 10 * 10) : (int) ((feet + 25) / 50 * 50);
                 if (ft <= 0) ft = 50;
@@ -2666,25 +2632,19 @@ public class BAPBridge {
     }
 
     private static int getBargraphDenominatorM(RouteGuidance.State s, int manIdx, int prepareThresholdM) {
-        if (manIdx < 0 || s == null || s.mDistance == null || manIdx >= s.mDistance.length) {
+        if (manIdx < 0 || s == null) {
             return -1;
         }
-        int rawStepM = s.mDistance[manIdx];
+        int rawStepM = (s.mDistance != null && manIdx < s.mDistance.length) ? s.mDistance[manIdx] : -1;
         boolean isHighway = rawStepM > HIGHWAY_STEP_THRESHOLD_M || (s.mType != null && manIdx < s.mType.length && ManeuverMapper.isHighwayManeuver(s.mType[manIdx]));
         int policyCap = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
         if (policyCap <= 0) return -1;
-        int denominator = s.mDistance[manIdx];
         /*
-         * Step length is CPManeuver.initialDistance, derived from
-         * initialTravelEstimates.distanceRemaining.  Third-party nav apps that
-         * never set initialTravelEstimates (Google Maps) omit iAP2 TLV 0x0005
-         * entirely, so mDistance stays -1 and the bargraph used to be dead for
-         * the whole route.  Unknown step length -> run the bargraph over the
-         * policy cap, same window the capped case uses.
+         * The arrow graphic is composed in the approach zone (<= policyCap: ~1000 ft city, ~1.0 mi highway).
+         * To ensure the arrow smoothly fills throughout the approach zone where it is visible (and does not
+         * stay at 0 fill or immediately jump into flashing because of a short prior step length), the denominator
+         * must span the entire approach window.
          */
-        if (denominator <= 0 || denominator > policyCap) {
-            return policyCap;
-        }
-        return denominator;
+        return policyCap;
     }
 }
