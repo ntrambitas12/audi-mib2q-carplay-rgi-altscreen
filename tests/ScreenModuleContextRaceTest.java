@@ -57,6 +57,7 @@ public final class ScreenModuleContextRaceTest {
         volatile boolean throwOnBounce = false;
         volatile boolean throwOnTarget = false;
         volatile Runnable onBounceAction = null;
+        volatile Runnable onTargetAction = null;
 
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             String name = method.getName();
@@ -73,6 +74,11 @@ public final class ScreenModuleContextRaceTest {
                         throw new RuntimeException("Simulated hardware error on bounce ctx 72");
                     }
                 } else {
+                    if (onTargetAction != null) {
+                        Runnable action = onTargetAction;
+                        onTargetAction = null;
+                        try { action.run(); } catch (Throwable ignored) {}
+                    }
                     if (throwOnTarget) {
                         throw new RuntimeException("Simulated hardware error on target ctx " + ctx);
                     }
@@ -566,6 +572,56 @@ public final class ScreenModuleContextRaceTest {
             sm.stop();
         }
 
-        System.out.println("ScreenModuleContextRaceTest: ALL 11 CONCURRENCY/RACE SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 12: Disconnect Exactly Between Final Validation and Target IPC
+        // ============================================================
+        {
+            final ScreenModule sm = new ScreenModule();
+            final TestDisplayManagerHandler dmHandler = new TestDisplayManagerHandler();
+            IDisplayManager mockDm = createMockDm(dmHandler);
+
+            dmHandler.onTargetAction = new Runnable() {
+                public void run() {
+                    // Route ends or disconnects at the exact instant switchContext(80) executes
+                    sm.stop();
+                }
+            };
+
+            setField(ScreenModule.class, sm, "enabled", Boolean.TRUE);
+            synchronized (lock) {
+                setField(ScreenModule.class, sm, "dm", mockDm);
+                setField(ScreenModule.class, null, "connected", Boolean.TRUE);
+                setField(ScreenModule.class, null, "navActive", Boolean.TRUE);
+                setField(ScreenModule.class, null, "desiredCtx", new Integer(80));
+                setField(ScreenModule.class, null, "currentCtx", new Integer(74));
+            }
+            startWorker(sm);
+
+            // Wait for worker to complete the switch sequence:
+            // 72 (bounce) -> post-sleep check sees 80 -> switchContext(80) executes and fires onTargetAction (sm.stop())
+            // -> self-heals by keeping currentCtx=-1 -> worker detects desiredCtx=74 -> switchContext(74)
+            long deadline = System.currentTimeMillis() + 1500;
+            while (dmHandler.switchCalls.size() < 3 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+
+            // Assert:
+            // physical trace = 72, 80, 74
+            List expectedCalls = new ArrayList();
+            expectedCalls.add(new Integer(72));
+            expectedCalls.add(new Integer(80));
+            expectedCalls.add(new Integer(74));
+            check(dmHandler.switchCalls.equals(expectedCalls),
+                "T12: physical trace mismatch! Expected " + expectedCalls + " but got " + dmHandler.switchCalls);
+            check(dmHandler.currentContextId == 74, "T12: final physical context is 74");
+            check(ScreenModule.getDesiredCtx() == 74, "T12: final desired context is 74");
+            check(ScreenModule.getCurrentCtx() == 74, "T12: final currentCtx is 74");
+            check(!ScreenModule.isNavActive(), "T12: navActive is false");
+
+            // Reset
+            synchronized (lock) { setField(ScreenModule.class, sm, "dm", null); }
+        }
+
+        System.out.println("ScreenModuleContextRaceTest: ALL 12 CONCURRENCY/RACE SUITES PASS (" + checks + " checks)");
     }
 }

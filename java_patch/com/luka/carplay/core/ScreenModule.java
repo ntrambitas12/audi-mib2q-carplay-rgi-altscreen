@@ -491,8 +491,22 @@ public final class ScreenModule implements Module {
                     }
                 }
                 d.switchContext(ctx, TERMINAL_CLUSTER, null);
-                d.setUpdateRate(TERMINAL_CLUSTER, CLUSTER_FPS);   /* (idempotent when already running) */
-                clusterActive = true;
+                boolean stillValid;
+                synchronized (LOCK) {
+                    stillValid = (dm == d && desiredCtx == ctx);
+                    if (stillValid) {
+                        currentCtx = ctx;
+                        clusterActive = true;
+                    } else {
+                        currentCtx = -1;
+                        clusterActive = false;
+                        Log.i(TAG, "switch(" + ctx + ") superseded at write → " + desiredCtx);
+                    }
+                }
+                if (stillValid) {
+                    d.setUpdateRate(TERMINAL_CLUSTER, CLUSTER_FPS);   /* (idempotent when already running) */
+                    com.luka.carplay.cluster.ClusterLayerController.reapply();
+                }
             } else {
                 /* Preserve the stop-before-switch ordering, but never leave terminal 1
                  * parked at 0 FPS. On this A5/MHI2Q the stock
@@ -511,12 +525,14 @@ public final class ScreenModule implements Module {
                 } else {
                     d.switchContext(CTX_STOCK_CLUSTER, TERMINAL_CLUSTER, null);
                 }
-                clusterActive = false;
+                synchronized (LOCK) {
+                    if (dm == d) {
+                        currentCtx = (desiredCtx == ctx) ? ctx : -1;
+                    }
+                    clusterActive = false;
+                }
+                com.luka.carplay.cluster.ClusterLayerController.reapply();
             }
-            synchronized (LOCK) { if (dm == d) currentCtx = ctx; }
-            /* Context composition is now final: replay the last KDK popup geometry so a
-             * navActive edge cannot leave planes 98/101/102 at their previous opacity. */
-            com.luka.carplay.cluster.ClusterLayerController.reapply();
             Log.i(TAG, "cluster -> ctx " + ctx + " (active=" + clusterActive + ")");
         } catch (Throwable t) {
             Log.w(TAG, "switch(" + ctx + ") failed: " + t);
