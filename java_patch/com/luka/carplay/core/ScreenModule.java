@@ -160,14 +160,16 @@ public final class ScreenModule implements Module {
 
     /** Dynamic maneuver presentation gate owned by BAPBridge approach monitoring.
      *  Active only within approach threshold (<= 305m / <= 1600m) with confirmed frame-ready renderer.
-     *  Cruising / approach exit immediately returns desiredCtx to 74 and NEVER latches navHidePending. */
+     *  Cruising / approach exit immediately returns desiredCtx to 74 and NEVER latches navHidePending.
+     *  Presentation strictly depends on route activity; activation when route is inactive is rejected. */
     public static void setPresentationActive(boolean active) {
         boolean switchPending;
         synchronized (LOCK) {
+            if (active && !routeActive) {
+                return;
+            }
             presentationActive = active;
-            if (active) {
-                routeActive = true;
-            } else {
+            if (!active) {
                 rebindPending = false;
                 rebindReason = "";
             }
@@ -218,7 +220,23 @@ public final class ScreenModule implements Module {
     }
 
     public static boolean isPresentationActive() {
-        return navActive && !navHidePending;
+        return presentationActive;
+    }
+
+    public static boolean isNavHidePending() {
+        return navHidePending;
+    }
+
+    public static int getDesiredCtx() {
+        synchronized (LOCK) {
+            return desiredCtx;
+        }
+    }
+
+    public static int getCurrentCtx() {
+        synchronized (LOCK) {
+            return currentCtx;
+        }
     }
 
     public static boolean isRouteActive() {

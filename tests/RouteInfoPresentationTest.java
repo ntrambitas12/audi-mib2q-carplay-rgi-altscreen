@@ -173,11 +173,10 @@ public final class RouteInfoPresentationTest {
         // ============================================================
         Field rpf = ScreenModule.class.getDeclaredField("rebindPending");
         rpf.setAccessible(true);
-        Field naf = ScreenModule.class.getDeclaredField("navActive");
-        naf.setAccessible(true);
+        ScreenModule.setRouteActive(true);
 
         // Case 1: Initial baseline route at gen 300, 200m approach -> enter approach zone (ctx 80 active)
-        naf.setBoolean(null, true);
+        ScreenModule.setPresentationActive(true);
         rpf.setBoolean(null, false);
         RouteGuidance.State baseline = route();
         baseline.routeGeneration = 300L;
@@ -210,7 +209,7 @@ public final class RouteInfoPresentationTest {
 
         // Case 3: Reroute occurs -> new generation 302, city turn at 200 m (<= 305 m)
         // With ctx 80 currently active, MUST trigger forced 72->80 context rebind!
-        naf.setBoolean(null, true);
+        ScreenModule.setPresentationActive(true);
         rpf.setBoolean(null, false);
         RouteGuidance.State rerouteNear = route();
         rerouteNear.routeGeneration = 302L;
@@ -232,7 +231,7 @@ public final class RouteInfoPresentationTest {
 
         // Case 4: Reroute occurs -> new generation 303, city turn at 200 m, but ctx 74 active (navActive=false)
         // Must NOT rebind (normal 74->80 switch path handles it)
-        naf.setBoolean(null, false);
+        ScreenModule.setPresentationActive(false);
         rpf.setBoolean(null, false);
         RouteGuidance.State rerouteStock = route();
         rerouteStock.routeGeneration = 303L;
@@ -249,7 +248,7 @@ public final class RouteInfoPresentationTest {
 
         // Case 5: Intermediate delta without maneuvers while awaiting maneuver for new generation
         com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
-        naf.setBoolean(null, true);
+        ScreenModule.setPresentationActive(true);
         rpf.setBoolean(null, false);
         RouteGuidance.State genOnly = route();
         genOnly.routeGeneration = 304L;

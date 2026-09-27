@@ -71,7 +71,13 @@ public final class RouteContextStateMachineTest {
         setField(BAPBridge.class, bridge, "appConnectorNavi", service);
         setField(BAPBridge.class, bridge, "initialized", Boolean.TRUE);
         setField(BAPBridge.class, bridge, "bapSessionStarted", Boolean.TRUE);
+        ScreenModule.setRouteActive(true);
+        ScreenModule.setPresentationActive(false);
         return bridge;
+    }
+
+    private static void setSimulatedPresentationActive(boolean active) {
+        ScreenModule.setPresentationActive(active);
     }
 
     private static RouteGuidance.State createState(long gen, int routeState, int manCount, int mType0, int distM) {
@@ -97,8 +103,6 @@ public final class RouteContextStateMachineTest {
         TestRebindCollector collector = new TestRebindCollector();
         ScreenModule.setRebindListener(collector);
 
-        Field naf = ScreenModule.class.getDeclaredField("navActive");
-        naf.setAccessible(true);
         Field rpf = ScreenModule.class.getDeclaredField("rebindPending");
         rpf.setAccessible(true);
 
@@ -110,7 +114,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
             rpf.setBoolean(null, false);
 
             // Step 1: gen 100, route_state 1, city turn, 200m -> approach = true, ctx = 80
@@ -166,7 +170,7 @@ public final class RouteContextStateMachineTest {
             com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
 
             // Active route gen 200 in approach
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
             RouteGuidance.State s200 = createState(200L, 1, 1, 1, 200);
             bridge.update(s200);
             collector.clear();
@@ -182,7 +186,7 @@ public final class RouteContextStateMachineTest {
             check(collector.count() == 0, "T2.2: gen 201 at 483m must cancel rebind and not trigger");
 
             // Opposite: gen 202 arrives empty, then arrives at 200m (inside approach)
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
             RouteGuidance.State s202_empty = createState(202L, 1, 0, 1, -1);
             bridge.update(s202_empty);
             check(collector.count() == 0, "T2.3: gen 202 empty does not rebind yet");
@@ -202,7 +206,7 @@ public final class RouteContextStateMachineTest {
             BAPBridge bridge = createBridge();
             collector.clear();
             com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             // Gen 100 active
             bridge.update(createState(100L, 1, 1, 1, 200));
@@ -227,7 +231,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             bridge.update(createState(200L, 1, 1, 1, 200));
             collector.clear();
@@ -252,7 +256,7 @@ public final class RouteContextStateMachineTest {
             for (int i = 0; i < farDistances.length; i++) {
                 BAPBridge bridge = createBridge();
                 collector.clear();
-                naf.setBoolean(null, true);
+                setSimulatedPresentationActive(true);
 
                 long gen = 500L + i;
                 RouteGuidance.State s = createState(gen, 1, 1, 1, farDistances[i]);
@@ -327,7 +331,7 @@ public final class RouteContextStateMachineTest {
             BAPBridge bridge = createBridge();
             collector.clear();
             com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             bridge.update(createState(800L, 1, 1, 1, 200));
             collector.clear();
@@ -346,7 +350,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             bridge.update(createState(900L, 1, 1, 1, 600));
             check(!ScreenModule.isNavActive(), "T9: 600m in ctx 74");
@@ -369,7 +373,7 @@ public final class RouteContextStateMachineTest {
             BAPBridge bridge = createBridge();
             collector.clear();
             com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             bridge.update(createState(1000L, 1, 1, 1, 200));
             collector.clear();
@@ -393,7 +397,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             // gen 1100, state 5 (authoritative)
             RouteGuidance.State s1 = createState(1100L, 5, 1, 1, 200);
@@ -411,7 +415,7 @@ public final class RouteContextStateMachineTest {
             // gen 1102, no route_state (unauthenticated 5)
             RouteGuidance.State s3 = createState(1102L, 5, 1, 1, 200);
             s3.routeStateGeneration = -1L;
-            naf.setBoolean(null, true); // simulate KDK active
+            setSimulatedPresentationActive(true); // simulate KDK active
             bridge.update(s3);
             check(ScreenModule.isNavActive(), "T11: unauthenticated 5 does NOT suppress approach for gen 1102");
             check(collector.count() == 1, "T11: gen 1102 at 200m rebinds");
@@ -423,7 +427,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             // gen 1200 active
             bridge.update(createState(1200L, 1, 1, 1, 200));
@@ -476,7 +480,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             final StringBuffer trace = new StringBuffer();
             ScreenModule.setRebindListener(new ScreenModule.RebindListener() {
@@ -525,7 +529,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             Random rnd = new Random(42);
             long gen = 2000L;
@@ -585,7 +589,7 @@ public final class RouteContextStateMachineTest {
         {
             BAPBridge bridge = createBridge();
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             IndependentReferenceModel ref = new IndependentReferenceModel();
             Random rnd = new Random(1337);
@@ -614,6 +618,13 @@ public final class RouteContextStateMachineTest {
 
                 int postRebinds = collector.count();
                 int newRebinds = postRebinds - preRebinds;
+
+                check(ScreenModule.isRouteActive() == ref.routeActive,
+                    "T16 step " + iter + ": routeActive parity (actual=" + ScreenModule.isRouteActive() + " vs ref=" + ref.routeActive + ")");
+                check(ScreenModule.isPresentationActive() == ref.presentationActive,
+                    "T16 step " + iter + ": presentationActive parity (actual=" + ScreenModule.isPresentationActive() + " vs ref=" + ref.presentationActive + ")");
+                check(ScreenModule.isNavHidePending() == ref.navHidePending,
+                    "T16 step " + iter + ": navHidePending parity (actual=" + ScreenModule.isNavHidePending() + " vs ref=" + ref.navHidePending + ")");
                 check(ScreenModule.isNavActive() == ref.navActive,
                     "T16 step " + iter + ": navActive parity (actual=" + ScreenModule.isNavActive() + " vs ref=" + ref.navActive + ")");
                 check(collector.count() == ref.totalRebinds,
@@ -630,25 +641,91 @@ public final class RouteContextStateMachineTest {
             }
         }
 
-        System.out.println("RouteContextStateMachineTest: ALL 16 HOSTILE/DETERMINISTIC SUITES & 150000 FUZZ CYCLES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 17: Lifecycle State Transitions & Rejection of Late Presentation
+        // ============================================================
+        {
+            ScreenModule.setRouteActive(false);
+            ScreenModule.setPresentationActive(false);
+            check(!ScreenModule.isRouteActive(), "T17.1: routeActive initially false");
+            check(!ScreenModule.isPresentationActive(), "T17.1: presentationActive initially false");
+            check(!ScreenModule.isNavHidePending(), "T17.1: navHidePending initially false");
+            check(!ScreenModule.isNavActive(), "T17.1: navActive initially false");
+
+            // Stale presentation callback while route is inactive MUST BE REJECTED
+            ScreenModule.setPresentationActive(true);
+            check(!ScreenModule.isRouteActive(), "T17.2: stale presentationActive=true CANNOT resurrect routeActive");
+            check(!ScreenModule.isPresentationActive(), "T17.2: stale presentationActive=true rejected");
+            check(!ScreenModule.isNavActive(), "T17.2: navActive remains false");
+
+            // Start route session (cruising)
+            ScreenModule.setRouteActive(true);
+            check(ScreenModule.isRouteActive(), "T17.3: routeActive is true");
+            check(!ScreenModule.isPresentationActive(), "T17.3: presentationActive is false (cruising)");
+            check(!ScreenModule.isNavActive(), "T17.3: navActive is false in cruising");
+
+            // Enter approach zone
+            ScreenModule.setPresentationActive(true);
+            check(ScreenModule.isRouteActive(), "T17.4: routeActive is true");
+            check(ScreenModule.isPresentationActive(), "T17.4: presentationActive is true (approach)");
+            check(ScreenModule.isNavActive(), "T17.4: navActive is true in approach");
+
+            // Exit approach zone (still in route)
+            ScreenModule.setPresentationActive(false);
+            check(ScreenModule.isRouteActive(), "T17.5: routeActive is true");
+            check(!ScreenModule.isPresentationActive(), "T17.5: presentationActive is false (cruising)");
+            check(!ScreenModule.isNavActive(), "T17.5: navActive is false in cruising");
+            check(!ScreenModule.isNavHidePending(), "T17.5: approach exit NEVER latches navHidePending");
+
+            // Enter approach again with KDK visible
+            ScreenModule.setPresentationActive(true);
+            com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
+            check(ScreenModule.isNavActive(), "T17.6: navActive is true");
+
+            // Route ends while KDK is still visible -> latches navHidePending until Fct44 withdrawal
+            ScreenModule.setRouteActive(false);
+            check(!ScreenModule.isRouteActive(), "T17.7: routeActive dropped to false on route end");
+            check(!ScreenModule.isPresentationActive(), "T17.7: presentationActive dropped to false on route end");
+            check(ScreenModule.isNavHidePending(), "T17.7: navHidePending latched because KDK was visible");
+            check(ScreenModule.isNavActive(), "T17.7: navActive held true by navHidePending");
+
+            // Late presentation callback arrives during KDK hold
+            ScreenModule.setPresentationActive(true);
+            check(!ScreenModule.isRouteActive(), "T17.8: stale presentation callback during KDK hold cannot resurrect routeActive");
+            check(!ScreenModule.isPresentationActive(), "T17.8: stale presentationActive rejected");
+            check(ScreenModule.isNavHidePending(), "T17.8: navHidePending still held");
+
+            // Fct44 withdrawal arrives (VC hides KDK)
+            com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(false);
+            check(!ScreenModule.isRouteActive(), "T17.9: routeActive remains false");
+            check(!ScreenModule.isPresentationActive(), "T17.9: presentationActive remains false");
+            check(!ScreenModule.isNavHidePending(), "T17.9: navHidePending released");
+            check(!ScreenModule.isNavActive(), "T17.9: navActive is now false");
+        }
+
+        System.out.println("RouteContextStateMachineTest: ALL 17 HOSTILE/DETERMINISTIC SUITES & 150000 FUZZ CYCLES PASS (" + checks + " checks)");
     }
 
     private static final class IndependentReferenceModel {
         long currentGen = -1L;
         boolean inApproach = false;
-        boolean navActive = false;
         boolean pendingRebind = false;
         int totalRebinds = 0;
         boolean rebindThisStep = false;
         long reboundGen = -1L;
         boolean isRerouting = false;
 
+        boolean routeActive = true;
+        boolean presentationActive = false;
+        boolean navHidePending = false;
+        boolean navActive = false;
+
         void step(long gen, int rState, boolean auth, int manCount, int mType, int distM) {
             rebindThisStep = false;
             boolean genChanged = (gen >= 0 && gen != currentGen);
             if (genChanged) {
                 currentGen = gen;
-                pendingRebind = pendingRebind || navActive;
+                pendingRebind = pendingRebind || presentationActive;
                 if (!pendingRebind) inApproach = false;
             }
 
@@ -684,7 +761,8 @@ public final class RouteContextStateMachineTest {
                 }
             }
 
-            navActive = nowApproach;
+            presentationActive = nowApproach;
+            navActive = (routeActive && presentationActive) || navHidePending;
         }
     }
 }

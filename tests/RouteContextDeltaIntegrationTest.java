@@ -147,7 +147,13 @@ public final class RouteContextDeltaIntegrationTest {
             setField(BAPBridge.class, bridge, "rendererClient", renderer);
             setField(BAPBridge.class, bridge, "customRendererStarted", Boolean.TRUE);
         }
+        ScreenModule.setRouteActive(true);
+        ScreenModule.setPresentationActive(false);
         return bridge;
+    }
+
+    private static void setSimulatedPresentationActive(boolean active) {
+        ScreenModule.setPresentationActive(active);
     }
 
     private static void feed(RouteGuidance rg, Method parseMethod, RouteGuidance.State state,
@@ -208,7 +214,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Step 1: Initial active route at 200m
             feed(rg, parseMethod, state, bridge,
@@ -272,7 +278,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
             ClusterLayerController.onVcVisibility(true);
-            naf.setBoolean(null, true); // Vehicle currently in ctx 80 with KDK visible
+            setSimulatedPresentationActive(true); // Vehicle currently in ctx 80 with KDK visible
 
             // Establish baseline generation 101 at 200m
             feed(rg, parseMethod, state, bridge,
@@ -316,7 +322,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             feed(rg, parseMethod, state, bridge,
                 "route_generation:n:110\n" +
@@ -355,7 +361,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             // Gen 200: state 5
             feed(rg, parseMethod, state, bridge,
@@ -395,7 +401,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             feed(rg, parseMethod, state, bridge,
                 "route_generation:n:210\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n");
@@ -427,7 +433,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             // Establish gen 300 active in 80
             feed(rg, parseMethod, state, bridge,
@@ -459,7 +465,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // 1. Enter approach at 200m (left turn)
             feed(rg, parseMethod, state, bridge,
@@ -599,7 +605,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, true);
+            setSimulatedPresentationActive(true);
 
             // Establish gen 100 at 200m
             feed(rg, parseMethod, state, bridge,
@@ -626,7 +632,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Gen 201 arrives with maneuver at 200m, but NO route_state
             feed(rg, parseMethod, state, bridge,
@@ -654,7 +660,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Gen 300 state 1
             feed(rg, parseMethod, state, bridge,
@@ -687,7 +693,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             feed(rg, parseMethod, state, bridge, "route_generation:n:501\nroute_state:n:1\n");
             check(!ScreenModule.isNavActive(), "S12.1: gen+state alone not approach");
@@ -721,7 +727,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             int[] invalidTypes = new int[]{-1, 54, 100, 255};
             for (int i = 0; i < invalidTypes.length; i++) {
@@ -748,7 +754,7 @@ public final class RouteContextDeltaIntegrationTest {
                 RouteGuidance rg = new RouteGuidance();
                 RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
                 collector.clear();
-                naf.setBoolean(null, false);
+                setSimulatedPresentationActive(false);
                 long gen = 700L + i;
 
                 // 1601m: outside approach
@@ -779,7 +785,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Feed route with NO route_generation ever
             feed(rg, parseMethod, state, bridge,
@@ -804,7 +810,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Send full delta into parser
             byte[] bytes = ("route_generation:n:900\nroute_state:n:1\nmaneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:200\n").getBytes("UTF-8");
@@ -840,7 +846,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             feed(rg, parseMethod, state, bridge,
                 "source_supports_rg:n:1\n" +
@@ -883,7 +889,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Gen 550, city type 1 @ 400m (>305m city threshold) -> NOT in approach
             feed(rg, parseMethod, state, bridge,
@@ -921,7 +927,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Route A (gen 600) with active lane guidance
             feed(rg, parseMethod, state, bridge,
@@ -975,7 +981,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Route A (gen 700) with road and destination
             feed(rg, parseMethod, state, bridge,
@@ -1035,7 +1041,7 @@ public final class RouteContextDeltaIntegrationTest {
                 RouteGuidance rg = new RouteGuidance();
                 RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
                 collector.clear();
-                naf.setBoolean(null, false);
+                setSimulatedPresentationActive(false);
 
                 // Pre-established route session
                 feed(rg, parseMethod, state, bridge, "source_supports_rg:n:1\nroute_generation:n:750\nroute_state:n:1\n");
@@ -1059,7 +1065,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             feed(rg, parseMethod, state, bridge,
                 "source_supports_rg:n:1\n" +
@@ -1114,7 +1120,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             long[] jumpGens = new long[]{
                 100L,

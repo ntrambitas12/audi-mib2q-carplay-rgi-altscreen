@@ -54,10 +54,48 @@ public final class RouteContextRendererLifecycleTest {
         int lastIcon = -1;
         int lastExitAngle = 0;
         boolean failNextSend = false;
+        boolean mockFrameReady = true;
+        boolean mockReady = true;
+        StateListener stateListener = null;
+        final List trace = new ArrayList();
+
+        public void setStateListener(StateListener l) {
+            this.stateListener = l;
+            super.setStateListener(l);
+        }
+
+        public boolean connect() {
+            return true;
+        }
+
+        public boolean isReady() {
+            return mockReady;
+        }
+
+        public boolean isFrameReady() {
+            return mockFrameReady;
+        }
 
         public boolean sendClear() {
             clears++;
+            trace.add("CLEAR");
             return true;
+        }
+
+        public void notifyFrameCleared() {
+            mockFrameReady = false;
+            trace.add("FRAME_CLEARED");
+            if (stateListener != null) {
+                stateListener.onRendererStateChanged("frame-cleared");
+            }
+        }
+
+        public void notifyFrameReady() {
+            mockFrameReady = true;
+            trace.add("FRAME_READY");
+            if (stateListener != null) {
+                stateListener.onRendererStateChanged("frame-ready");
+            }
         }
 
         public boolean sendBapProgressManeuver(int icon, int direction, int exitAngle,
@@ -69,6 +107,9 @@ public final class RouteContextRendererLifecycleTest {
             maneuvers++;
             lastIcon = icon;
             lastExitAngle = exitAngle;
+            if (!trace.contains("MANEUVER")) {
+                trace.add("MANEUVER");
+            }
             return true;
         }
 
@@ -79,6 +120,23 @@ public final class RouteContextRendererLifecycleTest {
             progressCalls++;
             return true;
         }
+
+        public boolean sendVisibleArea(int x, int y, int w, int h) {
+            return true;
+        }
+
+        public boolean sendManeuver(int icon, int direction, int exitAngle,
+                int drivingSide, int[] junctionAngles, int level, int mode, int perspective) {
+            maneuvers++;
+            if (!trace.contains("MANEUVER")) {
+                trace.add("MANEUVER");
+            }
+            return true;
+        }
+    }
+
+    private static void setSimulatedPresentationActive(boolean active) {
+        ScreenModule.setPresentationActive(active);
     }
 
     private static final class BapProxyHandler implements InvocationHandler {
@@ -96,6 +154,14 @@ public final class RouteContextRendererLifecycleTest {
         f.set(target, val);
     }
 
+    private static de.audi.tghu.navi.app.cluster.ClusterService createClusterService() throws Exception {
+        Field uf = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+        uf.setAccessible(true);
+        sun.misc.Unsafe unsafe = (sun.misc.Unsafe) uf.get(null);
+        return (de.audi.tghu.navi.app.cluster.ClusterService)
+            unsafe.allocateInstance(de.audi.tghu.navi.app.cluster.ClusterService.class);
+    }
+
     private static BAPBridge createBridge(MockRenderer renderer) throws Exception {
         BAPBridge bridge = new BAPBridge();
         CombiBAPServiceNavi service = (CombiBAPServiceNavi) Proxy.newProxyInstance(
@@ -109,6 +175,8 @@ public final class RouteContextRendererLifecycleTest {
             setField(BAPBridge.class, bridge, "rendererClient", renderer);
             setField(BAPBridge.class, bridge, "customRendererStarted", Boolean.TRUE);
         }
+        ScreenModule.setRouteActive(true);
+        ScreenModule.setPresentationActive(false);
         return bridge;
     }
 
@@ -150,7 +218,7 @@ public final class RouteContextRendererLifecycleTest {
             MockRenderer renderer = new MockRenderer();
             BAPBridge bridge = createBridge(renderer);
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // 1. Cruising outside approach at 500m -> ctx 74, renderer not active
             RouteGuidance.State sFar = createState(100L, 1, 100L, 1, -90, 500, 1);
@@ -227,7 +295,7 @@ public final class RouteContextRendererLifecycleTest {
             MockRenderer renderer = new MockRenderer();
             BAPBridge bridge = createBridge(renderer);
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Simulate broken pipe on renderer
             renderer.failNextSend = true;
@@ -252,7 +320,7 @@ public final class RouteContextRendererLifecycleTest {
             MockRenderer renderer = new MockRenderer();
             BAPBridge bridge = createBridge(renderer);
             collector.clear();
-            naf.setBoolean(null, true); // Active in 80
+            setSimulatedPresentationActive(true); // Active in 80
 
             // Initial left turn at 200m (version 1)
             RouteGuidance.State s1 = createState(300L, 1, 300L, 1, -90, 200, 1);
@@ -276,7 +344,7 @@ public final class RouteContextRendererLifecycleTest {
             MockRenderer renderer = new MockRenderer();
             BAPBridge bridge = createBridge(renderer);
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // 1. Highway ramp at 1000m -> within 1600m threshold -> approaches in 80
             RouteGuidance.State sHighway = createState(400L, 1, 400L, 8, 45, 1000, 1); // MT_OFF_RAMP (8)
@@ -303,7 +371,8 @@ public final class RouteContextRendererLifecycleTest {
 
             for (int session = 0; session < 100; session++) {
                 collector.clear();
-                naf.setBoolean(null, false);
+                bridge.onStart();
+                setSimulatedPresentationActive(false);
                 long gen = 1000L + session;
 
                 // Route start + approach
@@ -329,7 +398,7 @@ public final class RouteContextRendererLifecycleTest {
             MockRenderer renderer = new MockRenderer();
             BAPBridge bridge = createBridge(renderer);
             collector.clear();
-            naf.setBoolean(null, false);
+            setSimulatedPresentationActive(false);
 
             // Session 1: gen 500 in approach
             RouteGuidance.State s1 = createState(500L, 1, 500L, 1, -90, 200, 1);
@@ -352,6 +421,98 @@ public final class RouteContextRendererLifecycleTest {
             check(collector.count() == 0, "T7: clean 74->80 entry, no stale rebind from session 1");
         }
 
-        System.out.println("RouteContextRendererLifecycleTest: ALL 7 RENDERER/LIFECYCLE SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 8: Physical Operation Trace & Settlement Invariant
+        // ============================================================
+        {
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = createBridge(renderer);
+            setField(BAPBridge.class, bridge, "csRef", createClusterService());
+            collector.clear();
+            ScreenModule.setRouteActive(true);
+            setSimulatedPresentationActive(false);
+
+            // 1. Initial approach entry with frame-ready renderer
+            renderer.mockFrameReady = true;
+            RouteGuidance.State s1 = createState(2000L, 1, 2000L, 1, -90, 200, 1);
+            bridge.update(s1);
+            check(ScreenModule.isPresentationActive(), "T8: approach entered");
+            check(ScreenModule.getDesiredCtx() == 80, "T8: desiredCtx is 80 in approach");
+
+            renderer.trace.clear();
+
+            // 2. Approach exit -> triggers CLEAR, FRAME_CLEARED, CTX_74
+            RouteGuidance.State sFar = createState(2000L, 1, 2000L, 1, -90, 500, 1);
+            bridge.update(sFar);
+            check(renderer.trace.contains("CLEAR"), "T8: CLEAR sent to renderer on approach exit");
+
+            // Hardware completes frame clearing
+            renderer.notifyFrameCleared();
+            check(renderer.trace.contains("FRAME_CLEARED"), "T8: FRAME_CLEARED recorded");
+
+            check(!ScreenModule.isPresentationActive(), "T8: presentation deactivated");
+            check(ScreenModule.getDesiredCtx() == 74, "T8: desiredCtx returned to 74");
+            renderer.trace.add("CTX_74");
+
+            // 3. New maneuver arrives inside approach (200m) while frame is not yet ready
+            RouteGuidance.State sNewMan = createState(2000L, 1, 2000L, 2, 45, 200, 2);
+            bridge.update(sNewMan);
+            check(renderer.trace.contains("MANEUVER"), "T8: MANEUVER sent to renderer");
+
+            // Presentation held inactive while renderer is rasterizing (not frame-ready)
+            check(!ScreenModule.isPresentationActive(), "T8: presentation held inactive while not frame-ready");
+            check(ScreenModule.getDesiredCtx() == 74, "T8: desiredCtx held in 74");
+
+            // 4. Renderer signals swap completion / FRAME_READY
+            renderer.notifyFrameReady();
+            check(renderer.trace.contains("FRAME_READY"), "T8: FRAME_READY recorded");
+
+            // Next distance tick triggers context transition to 80
+            RouteGuidance.State sTick = createState(2000L, 1, 2000L, 2, 45, 195, 2);
+            bridge.update(sTick);
+            check(ScreenModule.isPresentationActive(), "T8: presentation activated on frame readiness");
+            check(ScreenModule.getDesiredCtx() == 80, "T8: desiredCtx switched to 80");
+            renderer.trace.add("CTX_80");
+
+            // Verify the physical trace sequence
+            List expected = new ArrayList();
+            expected.add("CLEAR");
+            expected.add("FRAME_CLEARED");
+            expected.add("CTX_74");
+            expected.add("MANEUVER");
+            expected.add("FRAME_READY");
+            expected.add("CTX_80");
+            check(renderer.trace.equals(expected),
+                "T8: physical trace mismatch!\nExpected: " + expected + "\nActual:   " + renderer.trace);
+
+            // ============================================================
+            // INVARIANT: Cannot settle in ctx 80 when renderer readiness is withdrawn
+            // ============================================================
+            // 1. Renderer readiness lost mid-approach
+            renderer.notifyFrameCleared();
+            bridge.update(createState(2000L, 1, 2000L, 2, 45, 190, 2));
+            check(!ScreenModule.isPresentationActive(),
+                "T8 INV: presentationActive must drop when frame readiness is lost");
+            check(!ScreenModule.isNavActive(),
+                "T8 INV: navActive must drop when frame readiness is lost");
+            check(ScreenModule.getDesiredCtx() == 74,
+                "T8 INV: cannot settle in ctx 80 when renderer is not frame-ready");
+
+            // 2. Subsequent updates while not frame-ready MUST continue to settle in ctx 74
+            for (int d = 180; d >= 50; d -= 20) {
+                bridge.update(createState(2000L, 1, 2000L, 2, 45, d, 2));
+                check(!ScreenModule.isPresentationActive(), "T8 INV: remains inactive at " + d + "m");
+                check(ScreenModule.getDesiredCtx() == 74, "T8 INV: desiredCtx remains 74 at " + d + "m");
+            }
+
+            // 3. Late/stale presentation call cannot resurrect routeActive or settle in 80
+            ScreenModule.setRouteActive(false);
+            ScreenModule.setPresentationActive(true);
+            check(!ScreenModule.isRouteActive(), "T8 INV: routeActive remains false");
+            check(!ScreenModule.isPresentationActive(), "T8 INV: presentationActive remains false");
+            check(ScreenModule.getDesiredCtx() == 74, "T8 INV: desiredCtx remains 74");
+        }
+
+        System.out.println("RouteContextRendererLifecycleTest: ALL 8 RENDERER/LIFECYCLE SUITES PASS (" + checks + " checks)");
     }
 }

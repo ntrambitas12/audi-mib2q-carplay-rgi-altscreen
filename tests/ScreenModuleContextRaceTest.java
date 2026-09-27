@@ -483,9 +483,11 @@ public final class ScreenModuleContextRaceTest {
             startWorker(sm);
 
             // Session A: route generation rebind arrives
-            ScreenModule.requestClusterContextRebind("session-A-leak-check");
-            check(((Boolean) getField(ScreenModule.class, null, "rebindPending")).booleanValue(),
-                "T10: rebindPending is true in Session A");
+            synchronized (lock) {
+                ScreenModule.requestClusterContextRebind("session-A-leak-check");
+                check(((Boolean) getField(ScreenModule.class, null, "rebindPending")).booleanValue(),
+                    "T10: rebindPending is true in Session A");
+            }
 
             // Session A disconnects / stops before worker consumes it
             sm.stop();
