@@ -93,6 +93,11 @@ public class BAPBridge {
      * Present in VC's supplementary fonts; on-unit fallback still needs testing. */
     private static final String ROUTE_TIME_PREFIX = "\u25CC ";
 
+    /* True whenever Java believes Audi BAP RG / KDK presentation is asserted. */
+    private volatile boolean bapPresentationActive = false;
+    /* Cache for formatted distance in FctID 19 to avoid continuous scroll resets. */
+    private String lastFormattedTurnDistance = "";
+
     /* CarPlay owns FctID 19/20/21/22/46 for the whole active RGI interval. */
     private String latchedPositionText = "";
     private String positionPrefix = "", positionSuffix = "";
@@ -429,6 +434,49 @@ public class BAPBridge {
         }
     }
 
+    private String formatTurnDistanceForText(int meters) {
+        if (meters <= 0) return "";
+        FormattedDistance fd = formatDistanceToTurn(meters);
+        if (fd == null || fd.value <= 0) return "";
+        return formatBapDistanceString(fd.value, fd.unit);
+    }
+
+    private static String formatBapDistanceString(int value, int unit) {
+        if (value <= 0) return "";
+        switch (unit) {
+            case BAP_DIST_UNIT_METERS:
+                return (value / 10) + " m";
+            case BAP_DIST_UNIT_KILOMETERS: {
+                int whole = value / 10;
+                int frac = value % 10;
+                return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
+            }
+            case BAP_DIST_UNIT_FEET:
+                return (value / 10) + " ft";
+            case BAP_DIST_UNIT_YARDS:
+                return (value / 10) + " yd";
+            case BAP_DIST_UNIT_MILES: {
+                int whole = value / 10;
+                int frac = value % 10;
+                return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
+            }
+            case 5: /* Quarter miles */ {
+                int qm = value / 10;
+                if (qm < 4) {
+                    if (qm == 1) return "1/4 mi";
+                    if (qm == 2) return "1/2 mi";
+                    if (qm == 3) return "3/4 mi";
+                }
+                int whole = qm / 4;
+                int rem = qm % 4;
+                if (rem == 0) return whole + " mi";
+                return (whole > 0) ? (whole + " " + rem + "/4 mi") : (rem + "/4 mi");
+            }
+            default:
+                return (value / 10) + " m";
+        }
+    }
+
     private FormattedDistance formatDistanceToDestination(int meters) {
         if (meters <= 0) return new FormattedDistance(-1, 0);
         try {
@@ -627,6 +675,93 @@ public class BAPBridge {
         catch (Exception e) { Log.w(TAG, "refreshRGIValid failed: " + e.getMessage()); }
     }
 
+    public boolean isBapPresentationActive() {
+        return bapPresentationActive;
+    }
+
+    /**
+     * Asserts the OEM Audi BAP route-guidance presentation and KDK pill on the Virtual Cockpit.
+     * Completes the full FSG sync(0) registration window: {17, 39, 23, 18, 49}.
+     * On any failure during opening, executes a compensating BAP rollback so the cluster
+     * is never left in a partial RGStatus=1 or rgiValid=true state.
+     */
+    private boolean openBapPresentation() {
+        if (bapPresentationActive) return true;
+
+        boolean success = false;
+        try {
+            forceClusterRouteInfoState(true);
+
+            appConnectorNavi.updateRGStatus(1);
+            appConnectorNavi.updateActiveRGType(ACTIVE_RGTYPE);
+
+            // Required to complete the FSG sync(0) registration window:
+            sendFollowStreet();
+            sendDistanceToManeuverRaw(0, false, 0);
+            sendExitView();
+
+            success = true;
+            bapPresentationActive = true;
+            Log.i(TAG, "openBapPresentation succeeded (rgType=" + ACTIVE_RGTYPE + ")");
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "openBapPresentation failed; executing compensating rollback: " + t);
+
+            try { appConnectorNavi.updateRGStatus(0); } catch (Throwable ignored) {}
+            try { appConnectorNavi.updateActiveRGType(0); } catch (Throwable ignored) {}
+            try { sendNoSymbol(); } catch (Throwable ignored) {}
+            try { sendDistanceToManeuverRaw(0, false, 0); } catch (Throwable ignored) {}
+            try { sendExitView(); } catch (Throwable ignored) {}
+            try { appConnectorNavi.updateManeuverState(BAP_MANEUVER_STATE_INACTIVE); } catch (Throwable ignored) {}
+            try { forceClusterRouteInfoState(false); } catch (Throwable ignored) {}
+
+            bapPresentationActive = false;
+            return false;
+        } finally {
+            if (!success) {
+                bapPresentationActive = false;
+            }
+        }
+    }
+
+    /**
+     * Unconditional and individually best-effort withdrawal of the OEM BAP presentation.
+     * Restores rgiValid=false and RGStatus(0) to close the speedometer KDK pill.
+     * Returns true ONLY if every step succeeded without throwing.
+     */
+    private boolean closeBapPresentation() {
+        boolean allOk = true;
+
+        try { appConnectorNavi.updateRGStatus(0); }
+        catch (Throwable t) { allOk = false; Log.w(TAG, "updateRGStatus(0) failed: " + t); }
+
+        try { appConnectorNavi.updateActiveRGType(0); }
+        catch (Throwable t) { allOk = false; Log.w(TAG, "updateActiveRGType(0) failed: " + t); }
+
+        try { sendNoSymbol(); }
+        catch (Throwable t) { allOk = false; }
+
+        try { sendDistanceToManeuverRaw(0, false, 0); }
+        catch (Throwable t) { allOk = false; }
+
+        try { sendExitView(); }
+        catch (Throwable t) { allOk = false; }
+
+        try { appConnectorNavi.updateManeuverState(BAP_MANEUVER_STATE_INACTIVE); }
+        catch (Throwable t) { allOk = false; }
+
+        try { forceClusterRouteInfoState(false); }
+        catch (Throwable t) { allOk = false; Log.w(TAG, "forceClusterRouteInfoState(false) failed: " + t); }
+
+        bapPresentationActive = !allOk;
+        if (allOk) {
+            Log.i(TAG, "closeBapPresentation completed successfully");
+        } else {
+            Log.w(TAG, "closeBapPresentation incomplete; retaining bapPresentationActive=true");
+        }
+        return allOk;
+    }
+
 
     /* ============================================================
      * REPLACE-mode takeover (connect-time, session-long)
@@ -757,23 +892,12 @@ public class BAPBridge {
              * rgActive/rgiValid avoids a one-frame KDK flicker. */
             startCustomRenderer();                 /* non-blocking; readiness edges drive completion */
 
-            /* Now safe to set cluster state flags — our window is displayable 98;
-             * ctx 80 makes the encoder read it via setActiveDisplayable(4,98). */
-            forceClusterRouteInfoState(true);
-
-            /*
-             * Guidance start -- BAP text overlays for HUD + VC text.
-             *
-             * 1. RGStatus(1) - FctID 17 -> triggers startSync(0) for {17,39,23,18,49}
-             * 2. Complete sync(0) window: rgType(39), descriptor(23), distance(18), exitView(49)
-             */
-            appConnectorNavi.updateRGStatus(1);                                      /* FctID 17 -> sync(0) */
-            appConnectorNavi.updateActiveRGType(ACTIVE_RGTYPE);                      /* FctID 39 */
-
-            /* Sync(0) FctIDs: descriptor, distance, exitView */
-            sendFollowStreet();                                                      /* FctID 23 */
-            sendDistanceToManeuverRaw(0, false, 0);                                  /* FctID 18 */
-            sendExitView();                                                          /* FctID 49 */
+            /* Open Audi BAP presentation and satisfy the initial FSG sync(0) registration window:
+             * {17, 39, 23, 18, 49}. If BAP opening fails, rollback cleanly and return false. */
+            if (!openBapPresentation()) {
+                rollbackFailedStart();
+                return false;
+            }
 
             Log.i(TAG, "Started (rgType=" + ACTIVE_RGTYPE
                 + ", cr=" + customRendererStarted + ")");
@@ -809,12 +933,7 @@ public class BAPBridge {
         clearPositionScroll();
         com.luka.carplay.core.ScreenModule.rollbackRouteLifecycle();
         com.luka.carplay.core.ScreenModule.setRgdActive(false);
-        try { appConnectorNavi.updateRGStatus(0); } catch (Throwable t) { }
-        try { appConnectorNavi.updateActiveRGType(0); } catch (Throwable t) { }
-        try { sendNoSymbol(); } catch (Throwable t) { }
-        try { sendDistanceToManeuverRaw(0, false, 0); } catch (Throwable t) { }
-        try { sendExitView(); } catch (Throwable t) { }
-        try { appConnectorNavi.updateManeuverState(0); } catch (Throwable t) { }
+        closeBapPresentation();
         try { appConnectorNavi.updateTurnToInfo("", ""); } catch (Throwable t) { }
         try { appConnectorNavi.updateCurrentPositionInfo(""); } catch (Throwable t) { }
         try { stopCustomRenderer(false); } catch (Throwable t) { }
@@ -825,6 +944,7 @@ public class BAPBridge {
         bapSessionStarted = false;
         rendererPrimed = false;
         crConsecutiveSendFailures = 0;
+        lastFormattedTurnDistance = "";
         /* Release FctIDs 19/20 only after our cleanup transaction has completed,
          * so stock cannot overwrite route text in the middle of rollback. */
         com.luka.carplay.core.ScreenNavStatusGate.setCurrentPositionInfoBlocked(false);
@@ -843,9 +963,11 @@ public class BAPBridge {
              * black screen. BAP teardown happens in onShutdown() on real disconnect. */
             stopActionBlinkThread();
             inApproachZone = false;
+            closeBapPresentation();
             com.luka.carplay.core.ScreenModule.setPresentationActive(false);
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
+            lastFormattedTurnDistance = "";
             routeTextPublished = false;
             infoPhase = 0;
             lastFirstManeuverIdx = -1;
@@ -886,6 +1008,7 @@ public class BAPBridge {
             }
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
+            lastFormattedTurnDistance = "";
             routeTextPublished = false;
             infoPhase = 0;
             lastEtaSeconds = -1L;
@@ -902,12 +1025,7 @@ public class BAPBridge {
              * cleanup below (else a mid-teardown exception leaves an orphan renderer or, in TAB,
              * a permanently shut RG gate). */
             try {
-                appConnectorNavi.updateRGStatus(0);
-                appConnectorNavi.updateActiveRGType(0);
-                sendNoSymbol();
-                sendDistanceToManeuverRaw(0, false, 0);
-                sendExitView();
-                appConnectorNavi.updateManeuverState(0);
+                closeBapPresentation();
                 appConnectorNavi.updateTurnToInfo("", "");
                 appConnectorNavi.updateCurrentPositionInfo("");
                 sendDistanceToDestinationRaw(0, false);
@@ -1101,23 +1219,20 @@ public class BAPBridge {
              * active. Full BAP/RouteInfo teardown is reserved for onRouteEnd / onShutdown.
              * Dynamically reactivate when entering the approach zone (<= 1000 ft). */
             if (!nowApproach) {
-                if (com.luka.carplay.core.ScreenModule.isPresentationActive()) {
-                    Log.i(TAG, "Approach zone EXIT: suspending maneuver presentation");
-                    try {
-                        sendNoSymbol();
-                        sendDistanceToManeuverRaw(0, false, 0);
-                        sendExitView();
-                        appConnectorNavi.updateManeuverState(BAP_MANEUVER_STATE_INACTIVE);
-                    } catch (Throwable t) {
-                        Log.w(TAG, "Approach suspend BAP update failed: " + t);
+                if (bapPresentationActive || com.luka.carplay.core.ScreenModule.isPresentationActive()) {
+                    Log.i(TAG, "Approach zone EXIT: closing BAP presentation");
+                    boolean closed = closeBapPresentation();
+                    if (closed) {
+                        com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                        if (rendererClient != null) {
+                            rendererClient.sendClear();
+                            lastCrIdx = -1;
+                            lastCrIcon = -1;
+                        }
+                        synchronized (this) { rendererManeuverPending = false; }
+                    } else {
+                        Log.w(TAG, "BAP close incomplete; retaining presentation state for retry");
                     }
-                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
-                    if (rendererClient != null) {
-                        rendererClient.sendClear();
-                        lastCrIdx = -1;
-                        lastCrIcon = -1;
-                    }
-                    synchronized (this) { rendererManeuverPending = false; }
                 }
             } else {
                 if (!com.luka.carplay.core.ScreenModule.isPresentationActive()) {
@@ -1125,24 +1240,24 @@ public class BAPBridge {
                     boolean rendererOk = (csRef == null)
                         || (customRendererStarted && rendererClient != null && rendererClient.isFrameReady());
                     if (rendererOk) {
-                        Log.i(TAG, "Approach zone ENTER: activating maneuver presentation");
-                        try {
-                            sendFollowStreet();
-                            sendExitView();
-                        } catch (Throwable t) {
-                            Log.w(TAG, "Approach activation BAP update failed: " + t);
+                        Log.i(TAG, "Approach zone ENTER: opening BAP presentation");
+                        if (openBapPresentation()) {
+                            com.luka.carplay.core.ScreenModule.setPresentationActive(true);
+                            dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
+                                   | RouteGuidance.State.DIRTY_DIST_MAN
+                                   | RouteGuidance.State.DIRTY_MANEUVER_STATE
+                                   | RouteGuidance.State.DIRTY_LANE_GUIDANCE;
+                        } else {
+                            Log.w(TAG, "Approach zone ENTER: BAP open failed; holding context switch");
                         }
-                        com.luka.carplay.core.ScreenModule.setPresentationActive(true);
-                        dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
-                               | RouteGuidance.State.DIRTY_DIST_MAN
-                               | RouteGuidance.State.DIRTY_MANEUVER_STATE
-                               | RouteGuidance.State.DIRTY_LANE_GUIDANCE;
                     } else {
                         Log.w(TAG, "Approach zone ENTER: renderer not frame-ready, holding context switch");
                     }
                 } else if (csRef != null && (rendererClient == null || !rendererClient.isFrameReady())) {
-                    Log.w(TAG, "Approach zone: renderer lost frame readiness; suspending presentation");
-                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                    Log.w(TAG, "Approach zone: renderer lost frame readiness; closing presentation");
+                    if (closeBapPresentation()) {
+                        com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                    }
                 }
             }
 
@@ -1242,6 +1357,12 @@ public class BAPBridge {
                 routeTextDirty |= RouteGuidance.State.DIRTY_DIST_DEST
                     | RouteGuidance.State.DIRTY_TIME_REMAINING
                     | RouteGuidance.State.DIRTY_ETA;
+            } else if ((dirty & RouteGuidance.State.DIRTY_DIST_MAN) != 0) {
+                String distStr = (firstIdx >= 0 && distM > 0) ? formatTurnDistanceForText(distM) : "";
+                if (!distStr.equals(lastFormattedTurnDistance)) {
+                    lastFormattedTurnDistance = distStr;
+                    routeTextDirty |= RouteGuidance.State.DIRTY_DIST_MAN;
+                }
             }
             if (!routeTextPublished || (dirty & routeTextDirty) != 0) {
                 updateLatchedRouteText(s);
@@ -1431,15 +1552,22 @@ public class BAPBridge {
             }
         }
 
-        /* Preserve the full payload. Street / signpost name only; distance is in FctID 18. */
+        if (positionRestart) {
+            lastFormattedTurnDistance = "";
+        }
+        String distStr = (idx >= 0 && s.distManeuverM > 0) ? formatTurnDistanceForText(s.distManeuverM) : "";
+        lastFormattedTurnDistance = distStr;
+
+        /* Preserve the full payload. Street / signpost name + distance; distance is from shared formatter. */
         positionPrefix = positionSuffix = "";
         if (signPost.length() > 0) {
-            latchedPositionText = signPost;
+            latchedPositionText = (distStr.length() > 0) ? (signPost + " | " + distStr) : signPost;
         } else if (turnTo.length() > 0) {
-            latchedPositionText = turnTo;
+            latchedPositionText = (distStr.length() > 0) ? (turnTo + " | " + distStr) : turnTo;
             positionPrefix = getTurnArrowPrefix(s, idx);
         } else {
-            latchedPositionText = normalizeRouteText(s.currentRoad);
+            String road = normalizeRouteText(s.currentRoad);
+            latchedPositionText = (distStr.length() > 0 && road.length() > 0) ? (road + " | " + distStr) : road;
         }
     }
 

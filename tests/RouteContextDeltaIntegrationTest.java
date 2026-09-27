@@ -113,12 +113,75 @@ public final class RouteContextDeltaIntegrationTest {
     }
 
     private static final class BapProxyHandler implements InvocationHandler {
-        public Object invoke(Object proxy, Method method, Object[] args) {
+        final List rgStatusHistory = new ArrayList();
+        final List activeRgTypeHistory = new ArrayList();
+        boolean throwOnRGStatus = false;
+        int throwOnRGStatusTarget = -1;
+        boolean throwOnActiveRGType = false;
+        int throwOnActiveRGTypeTarget = -1;
+        boolean throwOnceActiveRGType = false;
+
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            String name = method.getName();
+            if ("updateRGStatus".equals(name)) {
+                if (args != null && args.length > 0) {
+                    int val = ((Integer) args[0]).intValue();
+                    if (throwOnRGStatus && (throwOnRGStatusTarget == -1 || throwOnRGStatusTarget == val)) {
+                        throw new RuntimeException("Injected updateRGStatus failure");
+                    }
+                    rgStatusHistory.add(args[0]);
+                }
+            } else if ("updateActiveRGType".equals(name)) {
+                if (args != null && args.length > 0) {
+                    int val = ((Integer) args[0]).intValue();
+                    if (throwOnActiveRGType && (throwOnActiveRGTypeTarget == -1 || throwOnActiveRGTypeTarget == val)) {
+                        if (throwOnceActiveRGType) throwOnActiveRGType = false;
+                        throw new RuntimeException("Injected updateActiveRGType failure");
+                    }
+                    activeRgTypeHistory.add(args[0]);
+                }
+            }
             Class type = method.getReturnType();
             if (type == Boolean.TYPE) return Boolean.FALSE;
             if (type == Integer.TYPE) return Integer.valueOf(0);
             return null;
         }
+    }
+
+    public static final class TestClusterService extends de.audi.tghu.navi.app.cluster.ClusterService {
+        boolean rgiValid = false;
+        final List rgiHistory = new ArrayList();
+        de.audi.tghu.navi.app.command.DSIResponseContainer container;
+
+        TestClusterService() {
+            super(null, null, null, null, null, null);
+        }
+
+        public de.audi.tghu.navi.app.command.DSIResponseContainer getDSIResponseContainer() {
+            if (container == null) {
+                container = new de.audi.tghu.navi.app.command.DSIResponseContainer();
+            }
+            return container;
+        }
+
+        public void updateRGIString(short[] ashort) {
+            rgiValid = (ashort != null && ashort.length > 0);
+            if (rgiHistory != null) {
+                rgiHistory.add(Boolean.valueOf(rgiValid));
+            }
+        }
+
+        public void triggerRefreshRGIValid() {
+        }
+    }
+
+    private static TestClusterService createClusterService() throws Exception {
+        Field uf = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+        uf.setAccessible(true);
+        sun.misc.Unsafe unsafe = (sun.misc.Unsafe) uf.get(null);
+        TestClusterService cs = (TestClusterService) unsafe.allocateInstance(TestClusterService.class);
+        setField(TestClusterService.class, cs, "rgiHistory", new ArrayList());
+        return cs;
     }
 
     private static void setField(Class clazz, Object target, String name, Object val) throws Exception {
@@ -134,15 +197,23 @@ public final class RouteContextDeltaIntegrationTest {
     }
 
     private static BAPBridge createBridge(MockRenderer renderer) throws Exception {
+        return createBridge(renderer, new BapProxyHandler(), null);
+    }
+
+    private static BAPBridge createBridge(MockRenderer renderer, BapProxyHandler bapHandler, TestClusterService cs) throws Exception {
         ScreenModule.setNavActive(false);
         BAPBridge bridge = new BAPBridge();
         CombiBAPServiceNavi service = (CombiBAPServiceNavi) Proxy.newProxyInstance(
             RouteContextDeltaIntegrationTest.class.getClassLoader(),
             new Class[]{CombiBAPServiceNavi.class},
-            new BapProxyHandler());
+            bapHandler != null ? bapHandler : new BapProxyHandler());
         setField(BAPBridge.class, bridge, "appConnectorNavi", service);
         setField(BAPBridge.class, bridge, "initialized", Boolean.TRUE);
         setField(BAPBridge.class, bridge, "bapSessionStarted", Boolean.TRUE);
+        setField(BAPBridge.class, bridge, "nativeStopAttempted", Boolean.TRUE);
+        if (cs != null) {
+            setField(BAPBridge.class, bridge, "csRef", cs);
+        }
         if (renderer != null) {
             setField(BAPBridge.class, bridge, "rendererClient", renderer);
             setField(BAPBridge.class, bridge, "customRendererStarted", Boolean.TRUE);
@@ -1158,6 +1229,262 @@ public final class RouteContextDeltaIntegrationTest {
                 "S23: approach remains active at Long.MAX_VALUE");
         }
 
-        System.out.println("RouteContextDeltaIntegrationTest: ALL 23 END-TO-END SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Suite 24: Multi-Cycle Approach Sequence & DSI/DisplayManager Verification
+        // Sequence: START -> 200m -> 483m -> 200m -> 483m -> 200m
+        // ============================================================
+        {
+            BapProxyHandler bapHandler = new BapProxyHandler();
+            TestClusterService cs = createClusterService();
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = createBridge(renderer, bapHandler, cs);
+
+            // Wire up a test DisplayManager Kombi control to record physical switchContext calls
+            final List dmSwitches = new ArrayList();
+            IDisplayManagerKombiControl testDm = (IDisplayManagerKombiControl) Proxy.newProxyInstance(
+                RouteContextDeltaIntegrationTest.class.getClassLoader(),
+                new Class[]{IDisplayManagerKombiControl.class},
+                new InvocationHandler() {
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        String name = method.getName();
+                        if ("switchContext".equals(name) && args != null && args.length > 0) {
+                            dmSwitches.add(args[0]);
+                        }
+                        Class type = method.getReturnType();
+                        if (type == Boolean.TYPE) return Boolean.FALSE;
+                        if (type == Integer.TYPE) return Integer.valueOf(0);
+                        return null;
+                    }
+                });
+
+            Field dmf = ScreenModule.class.getDeclaredField("dm");
+            dmf.setAccessible(true);
+            Field desCf = ScreenModule.class.getDeclaredField("desiredCtx");
+            desCf.setAccessible(true);
+            Field curCf = ScreenModule.class.getDeclaredField("currentCtx");
+            curCf.setAccessible(true);
+            Field lockF = ScreenModule.class.getDeclaredField("LOCK");
+            lockF.setAccessible(true);
+            Object lockObj = lockF.get(null);
+
+            final ScreenModule sm = new ScreenModule();
+            synchronized (lockObj) {
+                dmf.set(sm, testDm);
+                desCf.setInt(null, 74);
+                curCf.setInt(null, 74);
+            }
+
+            Field wf = ScreenModule.class.getDeclaredField("worker");
+            wf.setAccessible(true);
+            final Method swLoop = ScreenModule.class.getDeclaredMethod("switchLoop", new Class[0]);
+            swLoop.setAccessible(true);
+            Thread worker = new Thread(new Runnable() {
+                public void run() {
+                    try { swLoop.invoke(sm, new Object[0]); }
+                    catch (Exception ignored) {}
+                }
+            }, "suite24-cluster-switch");
+            worker.setDaemon(true);
+            worker.start();
+            wf.set(sm, worker);
+
+            // 1. Initial route START
+            boolean started = bridge.onStart();
+            check(started, "S24: onStart succeeded");
+            check(bridge.isBapPresentationActive(), "S24 START: bapPresentationActive true");
+            check(cs.rgiValid, "S24 START: rgiValid true");
+            check(ScreenModule.isRouteActive(), "S24 START: routeActive true");
+            check(!ScreenModule.isPresentationActive(), "S24 START: presentationActive false");
+            check(ScreenModule.getDesiredCtx() == 74, "S24 START: desiredCtx 74");
+
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+
+            // 2. Approach Entry 1: 200m (<= 305m)
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:900\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle1 200m: routeActive true");
+            check(ScreenModule.isPresentationActive(), "S24 Cycle1 200m: presentationActive true");
+            check(bridge.isBapPresentationActive(), "S24 Cycle1 200m: bapPresentationActive true");
+            check(cs.rgiValid, "S24 Cycle1 200m: rgiValid true");
+            check(ScreenModule.getDesiredCtx() == 80, "S24 Cycle1 200m: desiredCtx 80");
+
+            long deadline = System.currentTimeMillis() + 1000;
+            while (ScreenModule.getCurrentCtx() != 80 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            check(ScreenModule.getCurrentCtx() == 80, "S24 Cycle1 200m: currentCtx reached 80");
+
+            // 3. Approach Exit 1: 483m (> 305m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle1 483m: routeActive STILL true");
+            check(!ScreenModule.isPresentationActive(), "S24 Cycle1 483m: presentationActive false");
+            check(!bridge.isBapPresentationActive(), "S24 Cycle1 483m: bapPresentationActive false");
+            check(!cs.rgiValid, "S24 Cycle1 483m: rgiValid false");
+            check(ScreenModule.getDesiredCtx() == 74, "S24 Cycle1 483m: desiredCtx 74");
+
+            deadline = System.currentTimeMillis() + 1000;
+            while (ScreenModule.getCurrentCtx() != 74 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            check(ScreenModule.getCurrentCtx() == 74, "S24 Cycle1 483m: currentCtx reached 74");
+
+            // 4. Approach Re-Entry 1: 200m (<= 305m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle2 200m: routeActive true");
+            check(ScreenModule.isPresentationActive(), "S24 Cycle2 200m: presentationActive true");
+            check(bridge.isBapPresentationActive(), "S24 Cycle2 200m: bapPresentationActive true");
+            check(cs.rgiValid, "S24 Cycle2 200m: rgiValid true");
+            check(ScreenModule.getDesiredCtx() == 80, "S24 Cycle2 200m: desiredCtx 80");
+
+            deadline = System.currentTimeMillis() + 1000;
+            while (ScreenModule.getCurrentCtx() != 80 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            check(ScreenModule.getCurrentCtx() == 80, "S24 Cycle2 200m: currentCtx reached 80");
+
+            // 5. Approach Exit 2: 483m (> 305m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle2 483m: routeActive STILL true");
+            check(!ScreenModule.isPresentationActive(), "S24 Cycle2 483m: presentationActive false");
+            check(!bridge.isBapPresentationActive(), "S24 Cycle2 483m: bapPresentationActive false");
+            check(!cs.rgiValid, "S24 Cycle2 483m: rgiValid false");
+            check(ScreenModule.getDesiredCtx() == 74, "S24 Cycle2 483m: desiredCtx 74");
+
+            deadline = System.currentTimeMillis() + 1000;
+            while (ScreenModule.getCurrentCtx() != 74 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            check(ScreenModule.getCurrentCtx() == 74, "S24 Cycle2 483m: currentCtx reached 74");
+
+            // 6. Approach Re-Entry 2: 200m (<= 305m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle3 200m: routeActive true");
+            check(ScreenModule.isPresentationActive(), "S24 Cycle3 200m: presentationActive true");
+            check(bridge.isBapPresentationActive(), "S24 Cycle3 200m: bapPresentationActive true");
+            check(cs.rgiValid, "S24 Cycle3 200m: rgiValid true");
+            check(ScreenModule.getDesiredCtx() == 80, "S24 Cycle3 200m: desiredCtx 80");
+
+            deadline = System.currentTimeMillis() + 1000;
+            while (ScreenModule.getCurrentCtx() != 80 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            check(ScreenModule.getCurrentCtx() == 80, "S24 Cycle3 200m: currentCtx reached 80");
+
+            // Verify explicit histories across START -> 200m -> 483m -> 200m -> 483m -> 200m:
+            check(bapHandler.rgStatusHistory.size() == 5, "S24: exactly 5 RGStatus transactions");
+            check(((Integer) bapHandler.rgStatusHistory.get(0)).intValue() == 1, "S24 RGStatus[0] == 1");
+            check(((Integer) bapHandler.rgStatusHistory.get(1)).intValue() == 0, "S24 RGStatus[1] == 0");
+            check(((Integer) bapHandler.rgStatusHistory.get(2)).intValue() == 1, "S24 RGStatus[2] == 1");
+            check(((Integer) bapHandler.rgStatusHistory.get(3)).intValue() == 0, "S24 RGStatus[3] == 0");
+            check(((Integer) bapHandler.rgStatusHistory.get(4)).intValue() == 1, "S24 RGStatus[4] == 1");
+
+            Field argf = BAPBridge.class.getDeclaredField("ACTIVE_RGTYPE");
+            argf.setAccessible(true);
+            int activeRgType = argf.getInt(null);
+
+            check(bapHandler.activeRgTypeHistory.size() == 5, "S24: exactly 5 ActiveRGType transactions");
+            check(((Integer) bapHandler.activeRgTypeHistory.get(0)).intValue() == activeRgType, "S24 ActiveRGType[0] == activeRgType");
+            check(((Integer) bapHandler.activeRgTypeHistory.get(1)).intValue() == 0, "S24 ActiveRGType[1] == 0");
+            check(((Integer) bapHandler.activeRgTypeHistory.get(2)).intValue() == activeRgType, "S24 ActiveRGType[2] == activeRgType");
+            check(((Integer) bapHandler.activeRgTypeHistory.get(3)).intValue() == 0, "S24 ActiveRGType[3] == 0");
+            check(((Integer) bapHandler.activeRgTypeHistory.get(4)).intValue() == activeRgType, "S24 ActiveRGType[4] == activeRgType");
+
+            // Verify physical DisplayManager switches occurred
+            check(dmSwitches.contains(Integer.valueOf(80)), "S24: DisplayManager executed switchContext(80)");
+            check(dmSwitches.contains(Integer.valueOf(74)), "S24: DisplayManager executed switchContext(74)");
+
+            // Teardown DisplayManager mock & worker
+            synchronized (lockObj) {
+                dmf.set(sm, null);
+                desCf.setInt(null, 74);
+                curCf.setInt(null, 74);
+            }
+        }
+
+        // ============================================================
+        // Suite 25: Failed openBapPresentation() Compensating Rollback
+        // ============================================================
+        {
+            BapProxyHandler bapHandler = new BapProxyHandler();
+            TestClusterService cs = createClusterService();
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = createBridge(renderer, bapHandler, cs);
+
+            // Inject failure when updateActiveRGType is called during open
+            bapHandler.throwOnActiveRGType = true;
+            bapHandler.throwOnceActiveRGType = true;
+
+            Method openMethod = BAPBridge.class.getDeclaredMethod("openBapPresentation", new Class[0]);
+            openMethod.setAccessible(true);
+
+            boolean openResult = ((Boolean) openMethod.invoke(bridge, new Object[0])).booleanValue();
+            check(!openResult, "S25: openBapPresentation returns false on partial failure");
+            check(!bridge.isBapPresentationActive(), "S25: bapPresentationActive is false after failed open");
+            check(!cs.rgiValid, "S25: rgiValid rolled back to false");
+
+            // Compensating rollback must have sent RGStatus(0) and ActiveRGType(0)
+            check(bapHandler.rgStatusHistory.size() >= 2, "S25: RGStatus sent 1 then compensating 0");
+            int lastRgStatus = ((Integer) bapHandler.rgStatusHistory.get(bapHandler.rgStatusHistory.size() - 1)).intValue();
+            check(lastRgStatus == 0, "S25: final RGStatus is 0 (compensating close)");
+        }
+
+        // ============================================================
+        // Suite 26: Failed closeBapPresentation() Context Retention & Retry
+        // ============================================================
+        {
+            BapProxyHandler bapHandler = new BapProxyHandler();
+            TestClusterService cs = createClusterService();
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = createBridge(renderer, bapHandler, cs);
+
+            RouteGuidance rg = new RouteGuidance();
+            RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
+
+            // Establish approach (200m)
+            feed(rg, parseMethod, state, bridge,
+                "source_supports_rg:n:1\n" +
+                "route_generation:n:950\n" +
+                "route_state:n:1\n" +
+                "maneuver_count:n:1\n" +
+                "maneuver_list:s:0\n" +
+                "m0_type:n:1\n" +
+                "dist_maneuver_m:n:200\n");
+            check(bridge.isBapPresentationActive(), "S26: bridge BAP presentation active");
+            check(ScreenModule.isPresentationActive(), "S26: ScreenModule presentation active");
+            check(ScreenModule.getDesiredCtx() == 80, "S26: desiredCtx is 80");
+
+            // Inject failure during close on updateRGStatus(0)
+            bapHandler.throwOnRGStatus = true;
+            bapHandler.throwOnRGStatusTarget = 0;
+
+            // Trigger approach exit (483m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
+
+            // Close failed, so Java MUST retain presentationActive=true and desiredCtx=80 to prevent split-brain!
+            check(bridge.isBapPresentationActive(), "S26 failed close: bapPresentationActive retained true");
+            check(ScreenModule.isPresentationActive(), "S26 failed close: presentationActive retained true");
+            check(ScreenModule.getDesiredCtx() == 80, "S26 failed close: desiredCtx 80 retained for retry");
+
+            // Remove failure injection and retry close on next update
+            bapHandler.throwOnRGStatus = false;
+            bapHandler.throwOnRGStatusTarget = -1;
+
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
+
+            // Retry succeeded: presentation closed cleanly, drops to 74
+            check(!bridge.isBapPresentationActive(), "S26 retry: bapPresentationActive is false");
+            check(!ScreenModule.isPresentationActive(), "S26 retry: presentationActive is false");
+            check(ScreenModule.getDesiredCtx() == 74, "S26 retry: desiredCtx dropped to 74");
+            check(!cs.rgiValid, "S26 retry: rgiValid is false");
+        }
+
+        System.out.println("RouteContextDeltaIntegrationTest: ALL 26 END-TO-END SUITES PASS (" + checks + " checks)");
     }
 }

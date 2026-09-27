@@ -286,6 +286,59 @@ public final class RouteInfoPresentationTest {
         check("navActive drops to 74 after KDK withdrawal", !ScreenModule.isNavActive());
         com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(false);
 
+        // Case 7: Distance bucketing in FctID 19 and maneuver-restart cache invalidation
+        // Verify absence of wrapper characters (<, >, \u2039, \u203a)
+        ScreenModule.setRouteActive(true);
+        set(BAPBridge.class, bridge, "infoPhase", Integer.valueOf(0));
+        output.positionCalls = 0;
+        RouteGuidance.State bucketState = route();
+        bucketState.routeGeneration = 400L;
+        bucketState.routeState = 1;
+        bucketState.routeStateGeneration = 400L;
+        bucketState.maneuverCount = 1;
+        bucketState.maneuverOrder = new int[]{0};
+        bucketState.mType[0] = 1;
+        bucketState.mExitInfo[0] = null;
+        bucketState.mAfterRoad[0] = "Main St";
+        bucketState.mName[0] = null;
+        bucketState.distManeuverM = 200;
+        bucketState.markAllDirtyForReplay();
+        bridge.update(bucketState);
+        check("Case 7: initial publish on maneuver feed", output.positionCalls >= 1);
+        check("Case 7: no wrapper < in position", output.position.indexOf('<') == -1);
+        check("Case 7: no wrapper > in position", output.position.indexOf('>') == -1);
+        check("Case 7: no wrapper \u2039 in position", output.position.indexOf('\u2039') == -1);
+        check("Case 7: no wrapper \u203a in position", output.position.indexOf('\u203a') == -1);
+        check("Case 7: maneuver distance formatted in position", output.position.indexOf("200 m") >= 0);
+
+        int callsBefore = output.positionCalls;
+        // Tick with distance staying in same bucket (200m -> 200m, only DIRTY_DIST_MAN)
+        bucketState.dirtyMask = RouteGuidance.State.DIRTY_DIST_MAN;
+        bucketState.distManeuverM = 200;
+        bridge.update(bucketState);
+        check("Case 7: distance in same bucket must NOT republish FctID 19", output.positionCalls == callsBefore);
+
+        // Tick with distance crossing bucket threshold (e.g. 150m)
+        bucketState.dirtyMask = RouteGuidance.State.DIRTY_DIST_MAN;
+        bucketState.distManeuverM = 150;
+        bridge.update(bucketState);
+        check("Case 7: distance crossing bucket threshold MUST republish FctID 19", output.positionCalls == callsBefore + 1);
+        check("Case 7: updated bucket distance in position", output.position.indexOf("150 m") >= 0);
+        check("Case 7: no wrapper chars in updated position",
+            output.position.indexOf('<') == -1 && output.position.indexOf('>') == -1 &&
+            output.position.indexOf('\u2039') == -1 && output.position.indexOf('\u203a') == -1);
+
+        // Maneuver identity change (mVer changes from 0 to 1) with distance still 150m
+        callsBefore = output.positionCalls;
+        bucketState.dirtyMask = RouteGuidance.State.DIRTY_MANEUVER_LIST | RouteGuidance.State.DIRTY_MANEUVER_TEXT;
+        bucketState.mVer[0] = 1;
+        bridge.update(bucketState);
+        check("Case 7: maneuver restart invalidates cache and republishes FctID 19 even with same distance",
+            output.positionCalls == callsBefore + 1);
+        check("Case 7: no wrapper chars after maneuver restart",
+            output.position.indexOf('<') == -1 && output.position.indexOf('>') == -1 &&
+            output.position.indexOf('\u2039') == -1 && output.position.indexOf('\u203a') == -1);
+
         System.out.println("RouteInfoPresentationTest: PASS (" + checks + " checks)");
     }
 }
