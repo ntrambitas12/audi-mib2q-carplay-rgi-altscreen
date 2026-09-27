@@ -56,6 +56,10 @@ public final class CurrentPositionStockChainTest {
         nativeGate.setCurrentPositionInfoBlocked(true);
         String[] samples = {
             "North Pennsylvania Avenue via Washington Boulevard and Main Street",
+            "Pennsylvania Avenue ",
+            "Main Street via ",
+            "Turn right onto ",
+            "word word word word word word word word word word word word",
             "Ленинградский проспект — Международное шоссе — аэропорт Шереметьево",
             "北京市朝阳区建国路前往东三环中路国际贸易中心出口",
             "Avenida de la Constitución hacia Plaza de España y estación central",

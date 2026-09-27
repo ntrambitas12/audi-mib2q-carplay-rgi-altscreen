@@ -134,6 +134,7 @@ public final class RouteContextDeltaIntegrationTest {
     }
 
     private static BAPBridge createBridge(MockRenderer renderer) throws Exception {
+        ScreenModule.setNavActive(false);
         BAPBridge bridge = new BAPBridge();
         CombiBAPServiceNavi service = (CombiBAPServiceNavi) Proxy.newProxyInstance(
             RouteContextDeltaIntegrationTest.class.getClassLoader(),

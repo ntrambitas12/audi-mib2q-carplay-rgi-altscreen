@@ -193,17 +193,21 @@ final class CurrentPositionScroll {
             pendingText = null;
         }
         if (pendingText == null) {
-            pendingText = directionMark + prefix + (fallback ? "\u2026" : source.substring(starts[frameIndex], ends[frameIndex])) + suffix;
-            if (pendingText.length() == 0) pendingText = "\u2026";
+            pendingText = formatFrame(frameIndex);
         }
         return pendingText;
+    }
+
+    private String formatFrame(int index) {
+        String body = fallback ? "\u2026" : source.substring(starts[index], ends[index]);
+        String text = directionMark + prefix + body + suffix;
+        return text.length() == 0 ? "\u2026" : text;
     }
 
     /** Used by initial/replay publication, preserving the current fragment. */
     String current() {
         if (pendingText == null) {
-            pendingText = directionMark + prefix + (fallback ? "\u2026" : source.substring(starts[frameIndex], ends[frameIndex])) + suffix;
-            if (pendingText.length() == 0) pendingText = "\u2026";
+            pendingText = formatFrame(frameIndex);
         }
         return pendingText;
     }

@@ -73,19 +73,23 @@ public final class ScreenModule implements Module {
         catch (Throwable t) { return true; }  /* only an explicit G24 value disables the feature */
     }
 
-    /* desiredCtx = target published by start()/stop()/setNavActive();
-     * currentCtx = what the worker last applied.  Both guarded by LOCK; the single worker switches whenever they differ.
-     * desiredCtx is a pure function of these (guarded by LOCK):
-     *   !connected                        -> 74 (stock)
-     *   connected, no nav                 -> 74 (stock cluster)
-     *   connected, nav active, cruising   -> 74 (stock cluster: speedometer opening hidden, clean native map)
-     *   connected, nav active, approach   -> 80 (CarPlay cluster composition: 98 maneuver, 101/102 backing, 33 stock map) */
+    /* desiredCtx = target published by setRouteActive()/setPresentationActive()/stop();
+     * currentCtx = what the worker last applied. Both guarded by LOCK; the worker switches whenever they differ.
+     * desiredCtx truth table:
+     *   !connected                                                          -> 74 (stock)
+     *   connected, routeActive=1, presentationActive=0 (cruising)           -> 74 (stock cluster: speedometer opening closed)
+     *   connected, routeActive=1, presentationActive=1 (approaching turn)   -> 80 (CarPlay cluster composition)
+     *   connected, routeActive=1, presentationActive=0 (approach exit)      -> 74 (immediate drop to stock cluster)
+     *   connected, routeActive=0, navHidePending=1 (route end, KDK visible) -> 80 (hold until Fct44 withdrawal)
+     *   connected, routeActive=0, navHidePending=0 (route end, KDK hidden)  -> 74 (stock cluster) */
     private static int desiredCtx = CTX_STOCK_CLUSTER;
     private static int currentCtx = -1;
     private static volatile boolean connected = false;
+    private static volatile boolean routeActive = false;
+    private static volatile boolean presentationActive = false;
     private static volatile boolean navActive = false;
     private static volatile boolean rgdActive = false;
-    private static boolean navHidePending;
+    private static boolean navHidePending = false;
     private static boolean rebindPending = false;
     private static String rebindReason = "";
 
@@ -115,34 +119,74 @@ public final class ScreenModule implements Module {
         }
     }
 
-    /** Recompute desiredCtx from connected/navActive and wake the worker. Caller must NOT hold LOCK. */
+    private static void recomputeDesiredCtxLocked() {
+        navActive = (routeActive && presentationActive) || navHidePending;
+        desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+    }
+
+    /** Recompute desiredCtx from connected/routeActive/presentationActive and wake the worker. Caller must NOT hold LOCK. */
     private static void republish() {
         synchronized (LOCK) {
-            desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+            recomputeDesiredCtxLocked();
             LOCK.notifyAll();
         }
     }
 
-    /** Presentation latch, not merely route intent.  RouteGuidance may set true only after the
-     *  BAP presentation has started (bap.onStart()); the renderer's FRAME_READY is not waited for.
-     *  Navigation owns the context; VC alone controls KDK opacity.  On route end, retain the
-     *  composition until VC withdraws visibility (Fct44), without a guessed timer. */
-    public static void setNavActive(boolean active) {
+    /** Route lifecycle gate owned by RouteGuidance / BAP session.
+     *  On route end, retains the composition only if VC KDK is visible (Fct44) until withdrawal. */
+    public static void setRouteActive(boolean active) {
         boolean switchPending;
         synchronized (LOCK) {
             if (!active) {
+                boolean wasActive = navActive || (desiredCtx == CTX_CLUSTER);
+                navHidePending = wasActive
+                    && com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
+                routeActive = false;
+                presentationActive = false;
                 rebindPending = false;
                 rebindReason = "";
+            } else {
+                routeActive = true;
+                navHidePending = false;
             }
-            navHidePending = !active && navActive
-                && com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
-            navActive = active || navHidePending;
-            desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+            recomputeDesiredCtxLocked();
             switchPending = (desiredCtx != currentCtx);
             LOCK.notifyAll();
         }
         if (!switchPending) {
             com.luka.carplay.cluster.ClusterLayerController.reapply();
+        }
+    }
+
+    /** Dynamic maneuver presentation gate owned by BAPBridge approach monitoring.
+     *  Active only within approach threshold (<= 305m / <= 1600m) with confirmed frame-ready renderer.
+     *  Cruising / approach exit immediately returns desiredCtx to 74 and NEVER latches navHidePending. */
+    public static void setPresentationActive(boolean active) {
+        boolean switchPending;
+        synchronized (LOCK) {
+            presentationActive = active;
+            if (active) {
+                routeActive = true;
+            } else {
+                rebindPending = false;
+                rebindReason = "";
+            }
+            recomputeDesiredCtxLocked();
+            switchPending = (desiredCtx != currentCtx);
+            LOCK.notifyAll();
+        }
+        if (!switchPending) {
+            com.luka.carplay.cluster.ClusterLayerController.reapply();
+        }
+    }
+
+    /** Combined route/presentation setter for legacy callers. */
+    public static void setNavActive(boolean active) {
+        if (active) {
+            setRouteActive(true);
+            setPresentationActive(true);
+        } else {
+            setRouteActive(false);
         }
     }
 
@@ -154,11 +198,10 @@ public final class ScreenModule implements Module {
         synchronized (LOCK) {
             if (!visible && navHidePending) {
                 navHidePending = false;
-                navActive = false;
                 rebindPending = false;
                 rebindReason = "";
                 release = true;
-                desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+                recomputeDesiredCtxLocked();
                 switchPending = (desiredCtx != currentCtx);
                 LOCK.notifyAll();
             }
@@ -168,9 +211,19 @@ public final class ScreenModule implements Module {
         }
     }
 
-    /** The cluster-layer visibility gate read by CombiMapController.  It follows the confirmed BAP
-     *  presentation and, after route end, VC's own KDK withdrawal; never a stray stock KDK bit. */
-    public static boolean isNavActive() { return navActive; }
+    /** The cluster-layer visibility gate read by CombiMapController and ClusterLayerController.
+     *  True whenever CarPlay layers are permitted to be visible on terminal 1. */
+    public static boolean isNavActive() {
+        return navActive;
+    }
+
+    public static boolean isPresentationActive() {
+        return navActive && !navHidePending;
+    }
+
+    public static boolean isRouteActive() {
+        return routeActive;
+    }
 
     public static boolean isRgdActive() { return rgdActive; }
 
@@ -275,10 +328,11 @@ public final class ScreenModule implements Module {
              * re-applies the desired ctx to the new one.  (In practice the same object each session.) */
             if (dm != d) { dm = d; currentCtx = -1; }
             connected = true;
-            navActive = false;
+            routeActive = false;
+            presentationActive = false;
             navHidePending = false;
             rgdActive = false;
-            desiredCtx = CTX_STOCK_CLUSTER;
+            recomputeDesiredCtxLocked();
         }
         synchronized (LOCK) {
             /* Create the single persistent worker once; recreate only if it never started or died.
@@ -303,7 +357,8 @@ public final class ScreenModule implements Module {
          * makes stale-worker races impossible (no per-session worker to outlive its session). */
         synchronized (LOCK) {
             connected = false;
-            navActive = false;
+            routeActive = false;
+            presentationActive = false;
             navHidePending = false;
             rgdActive = false;
             rebindPending = false;

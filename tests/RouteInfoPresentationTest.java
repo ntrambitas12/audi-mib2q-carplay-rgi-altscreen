@@ -247,8 +247,7 @@ public final class RouteInfoPresentationTest {
         check("new generation with inactive ctx 74 does not rebind",
             !rpf.getBoolean(null));
 
-        // Case 5: Intermediate delta without maneuvers while ctx 80 is latched (e.g. KDK fading)
-        // Followed by delta with maneuvers at 150m (<=305m). Must execute rebind!
+        // Case 5: Intermediate delta without maneuvers while awaiting maneuver for new generation
         com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
         naf.setBoolean(null, true);
         rpf.setBoolean(null, false);
@@ -262,8 +261,9 @@ public final class RouteInfoPresentationTest {
         bridge.update(genOnly);
         check("intermediate delta without maneuvers does not prematurely rebind",
             !rpf.getBoolean(null));
-        check("navActive remains latched while KDK visible", ScreenModule.isNavActive());
+        check("navActive drops to 74 while awaiting maneuver for new generation", !ScreenModule.isNavActive());
 
+        // Subsequent maneuver arrival for generation 304 at 150m executes the pending rebind
         RouteGuidance.State genWithManeuver = route();
         genWithManeuver.routeGeneration = 304L;
         genWithManeuver.routeState = 1;
@@ -276,6 +276,15 @@ public final class RouteInfoPresentationTest {
         bridge.update(genWithManeuver);
         check("subsequent maneuver arrival for generation 304 executes the pending rebind",
             rpf.getBoolean(null));
+        com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(false);
+
+        // Case 6: Genuine route end holds ctx 80 while KDK visible until Fct44 withdrawal
+        ScreenModule.setNavActive(true);
+        com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
+        ScreenModule.setRouteActive(false);
+        check("route end latches navHidePending while KDK visible", ScreenModule.isNavActive());
+        ScreenModule.onVcKdkVisibility(false);
+        check("navActive drops to 74 after KDK withdrawal", !ScreenModule.isNavActive());
         com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(false);
 
         System.out.println("RouteInfoPresentationTest: PASS (" + checks + " checks)");

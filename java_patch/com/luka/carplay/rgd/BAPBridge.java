@@ -690,7 +690,8 @@ public class BAPBridge {
             bapSessionStarted = false;
             clearPositionScroll();
             inApproachZone = false;
-            com.luka.carplay.core.ScreenModule.setNavActive(false);
+            com.luka.carplay.core.ScreenModule.setRouteActive(true);
+            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
             infoPhase = 0;
@@ -840,7 +841,7 @@ public class BAPBridge {
              * black screen. BAP teardown happens in onShutdown() on real disconnect. */
             stopActionBlinkThread();
             inApproachZone = false;
-            com.luka.carplay.core.ScreenModule.setNavActive(false);
+            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
@@ -876,7 +877,8 @@ public class BAPBridge {
              * states too — e.g., disconnect mid-route). */
             stopActionBlinkThread();
             inApproachZone = false;
-            com.luka.carplay.core.ScreenModule.setNavActive(false);
+            com.luka.carplay.core.ScreenModule.setRouteActive(false);
+            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
@@ -1020,9 +1022,9 @@ public class BAPBridge {
             boolean routeGenerationChanged = (s.routeGeneration >= 0L)
                 && (s.routeGeneration != lastProcessedRouteGeneration);
             if (routeGenerationChanged) {
-                inApproachZone = false;
                 lastProcessedRouteGeneration = s.routeGeneration;
-                routeRebindPending = true;
+                routeRebindPending = routeRebindPending || com.luka.carplay.core.ScreenModule.isPresentationActive();
+                if (!routeRebindPending) inApproachZone = false;
             }
             boolean primaryChanged = (firstIdx != lastFirstManeuverIdx)
                 || (currentFirstVer != lastFirstManeuverVer)
@@ -1078,16 +1080,13 @@ public class BAPBridge {
              * performs the 74 -> 80 acquisition.
              */
             if (routeRebindPending) {
-                if (nowApproach) {
-                    if (com.luka.carplay.core.ScreenModule.isNavActive()) {
+                if (hasManeuverList && hasUsableDistance) {
+                    if (nowApproach) {
                         com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
                             "route-generation=" + s.routeGeneration + ", approach=true");
                     }
                     routeRebindPending = false;
-                } else if (!com.luka.carplay.core.ScreenModule.isNavActive()
-                        || (hasManeuverList && hasUsableDistance)) {
-                    /* Distance is known to be outside approach (e.g. 0.3 mi city) or ctx 74 is active:
-                     * cancel the rebind request so it doesn't fire when later entering approach. */
+                } else if (shouldClearManeuver || explicitClear) {
                     routeRebindPending = false;
                 }
             }
@@ -1097,7 +1096,7 @@ public class BAPBridge {
              * active. Full BAP/RouteInfo teardown is reserved for onRouteEnd / onShutdown.
              * Dynamically reactivate when entering the approach zone (<= 1000 ft). */
             if (!nowApproach) {
-                if (com.luka.carplay.core.ScreenModule.isNavActive()) {
+                if (com.luka.carplay.core.ScreenModule.isPresentationActive()) {
                     Log.i(TAG, "Approach zone EXIT: suspending maneuver presentation");
                     try {
                         sendNoSymbol();
@@ -1107,7 +1106,7 @@ public class BAPBridge {
                     } catch (Throwable t) {
                         Log.w(TAG, "Approach suspend BAP update failed: " + t);
                     }
-                    com.luka.carplay.core.ScreenModule.setNavActive(false);
+                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
                     if (rendererClient != null) {
                         rendererClient.sendClear();
                         lastCrIdx = -1;
@@ -1116,7 +1115,7 @@ public class BAPBridge {
                     synchronized (this) { rendererManeuverPending = false; }
                 }
             } else {
-                if (!com.luka.carplay.core.ScreenModule.isNavActive()) {
+                if (!com.luka.carplay.core.ScreenModule.isPresentationActive()) {
                     if (csRef != null) startCustomRenderer();
                     boolean rendererOk = (csRef == null)
                         || (customRendererStarted && rendererClient != null && rendererClient.isFrameReady());
@@ -1128,7 +1127,7 @@ public class BAPBridge {
                         } catch (Throwable t) {
                             Log.w(TAG, "Approach activation BAP update failed: " + t);
                         }
-                        com.luka.carplay.core.ScreenModule.setNavActive(true);
+                        com.luka.carplay.core.ScreenModule.setPresentationActive(true);
                         dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
                                | RouteGuidance.State.DIRTY_DIST_MAN
                                | RouteGuidance.State.DIRTY_MANEUVER_STATE
@@ -1136,6 +1135,9 @@ public class BAPBridge {
                     } else {
                         Log.w(TAG, "Approach zone ENTER: renderer not frame-ready, holding context switch");
                     }
+                } else if (csRef != null && (rendererClient == null || !rendererClient.isFrameReady())) {
+                    Log.w(TAG, "Approach zone: renderer lost frame readiness; suspending presentation");
+                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
                 }
             }
 
@@ -2181,6 +2183,14 @@ public class BAPBridge {
                 rendererClient = new RendererServer();
                 rendererClient.setStateListener(new RendererServer.StateListener() {
                     public void onRendererStateChanged(String reason) {
+                        if ("frame-cleared".equals(reason)
+                                || "disconnect-request".equals(reason)
+                                || "disposed".equals(reason)
+                                || "disconnected".equals(reason)) {
+                            if (com.luka.carplay.core.ScreenModule.isPresentationActive()) {
+                                com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                            }
+                        }
                         notifyPresentationStateChanged("renderer-" + reason);
                     }
                 });
@@ -2193,6 +2203,9 @@ public class BAPBridge {
             /* If the current peer vanished/reconnected, withdraw the old presentation before
              * priming the replacement. All calls remain on RouteGuidance's worker/update path. */
             if (customRendererStarted && !rendererClient.isFrameReady()) {
+                if (com.luka.carplay.core.ScreenModule.isPresentationActive()) {
+                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                }
                 forceGfxAvailable(false);
                 customRendererStarted = false;
                 rendererPrimed = false;

@@ -369,7 +369,7 @@ public class RouteGuidance implements CarplayBus.Listener {
             presentationThread.setDaemon(true);
             presentationThread.start();
         }
-        com.luka.carplay.core.ScreenModule.setNavActive(false);
+        com.luka.carplay.core.ScreenModule.setRouteActive(false);
 
         CarplayBus bus = CarplayBus.getInstance();
         bus.on(CarplayBus.EVT_RGD_UPDATE, this);
@@ -411,7 +411,7 @@ public class RouteGuidance implements CarplayBus.Listener {
             presentationConfirmed = false;
             hasRouteUpdate = false;
             routeWantsActive = false;
-            com.luka.carplay.core.ScreenModule.setNavActive(false);
+            com.luka.carplay.core.ScreenModule.setRouteActive(false);
             if (bap != null) {
                 bap.onStop();
                 bap.onShutdown();
@@ -462,7 +462,7 @@ public class RouteGuidance implements CarplayBus.Listener {
             rgActive = false;
             presentationConfirmed = false;
             routeWantsActive = false;
-            com.luka.carplay.core.ScreenModule.setNavActive(false);  /* hide layers (stock ctx 74) */
+            com.luka.carplay.core.ScreenModule.setRouteActive(false);  /* hide layers (stock ctx 74) */
             hasRouteUpdate = false;
             state.reset();
             return;
@@ -542,14 +542,17 @@ public class RouteGuidance implements CarplayBus.Listener {
                  * presentationConfirmed tracks renderer/BAP readiness for the text hold. */
                 presentationConfirmed = false;
                 rgActive = bap != null && bap.onStart();
-                /* RC#4: do NOT call setNavActive(true) here. In the dynamic-context model,
-                 * setNavActive(true) = "open context 80 + dial cutout immediately". That must
+                if (rgActive) {
+                    com.luka.carplay.core.ScreenModule.setRouteActive(true);
+                }
+                /* RC#4: do NOT call setPresentationActive(true) here. In the dynamic-context model,
+                 * presentationActive = "open context 80 + dial cutout immediately". That must
                  * only happen inside BAPBridge.update() approach-zone ENTER, when the vehicle
                  * is within 1000 ft AND the renderer has a confirmed frame ready.  Calling it
                  * unconditionally from onStart() success was the root cause of the blank backing
                  * box: context 80 opened at session start (any distance) before the renderer
-                 * had painted a real maneuver icon.  bap.onStart() already calls
-                 * setNavActive(false) internally, so the false case is already covered. */
+                 * had painted a real maneuver icon.  bap.onStart() already sets
+                 * presentationActive(false) internally, so the false case is already covered. */
                 if (!rgActive) {
                     if (!bapStartPendingLogged) {
                         Log.w(TAG, "RG activation pending: BAP start did not complete; keeping ctx 74");
@@ -571,7 +574,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 rgActive = false;
                 presentationConfirmed = false;
                 /* RGI off -> hide the CarPlay cluster layers (stock ctx 74). */
-                com.luka.carplay.core.ScreenModule.setNavActive(false);
+                com.luka.carplay.core.ScreenModule.setRouteActive(false);
             }
         }
 
