@@ -82,6 +82,10 @@ public final class RouteContextDeltaIntegrationTest {
             return true;
         }
 
+        public boolean isFrameReady() {
+            return true;
+        }
+
         public boolean sendProgress(int level, int mode, int progressState) {
             progressCalls++;
             return true;

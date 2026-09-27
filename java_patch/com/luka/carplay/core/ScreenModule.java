@@ -128,6 +128,7 @@ public final class ScreenModule implements Module {
      *  Navigation owns the context; VC alone controls KDK opacity.  On route end, retain the
      *  composition until VC withdraws visibility (Fct44), without a guessed timer. */
     public static void setNavActive(boolean active) {
+        boolean switchPending;
         synchronized (LOCK) {
             if (!active) {
                 rebindPending = false;
@@ -136,15 +137,20 @@ public final class ScreenModule implements Module {
             navHidePending = !active && navActive
                 && com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
             navActive = active || navHidePending;
+            desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+            switchPending = (desiredCtx != currentCtx);
+            LOCK.notifyAll();
         }
-        republish();
-        com.luka.carplay.cluster.ClusterLayerController.reapply();
+        if (!switchPending) {
+            com.luka.carplay.cluster.ClusterLayerController.reapply();
+        }
     }
 
     /** Called after the layer controller has applied the received Fct44 visibility.
      *  A View fade-out must not release context while the route remains active. */
     public static void onVcKdkVisibility(boolean visible) {
         boolean release = false;
+        boolean switchPending = false;
         synchronized (LOCK) {
             if (!visible && navHidePending) {
                 navHidePending = false;
@@ -152,9 +158,14 @@ public final class ScreenModule implements Module {
                 rebindPending = false;
                 rebindReason = "";
                 release = true;
+                desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+                switchPending = (desiredCtx != currentCtx);
+                LOCK.notifyAll();
             }
         }
-        if (release) republish();
+        if (release && !switchPending) {
+            com.luka.carplay.cluster.ClusterLayerController.reapply();
+        }
     }
 
     /** The cluster-layer visibility gate read by CombiMapController.  It follows the confirmed BAP

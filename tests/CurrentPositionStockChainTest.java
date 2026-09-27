@@ -81,7 +81,7 @@ public final class CurrentPositionStockChainTest {
                 ByteArrayStream wire = new ByteArrayStream(); capture.text.serialize(wire);
                 byte[] bytes = wire.toByteArray();
                 check(bytes.length <= 97 && (bytes[0] & 255) == bytes.length - 1, "wire byte budget");
-                check(expected.equals(new String(bytes, 1, bytes.length - 1, "UTF-8")),
+                check(expected.trim().equals(new String(bytes, 1, bytes.length - 1, "UTF-8")),
                     "stock sender truncated/changed Unicode: sample=" + sample + " frame=" + i);
                 int writes = capture.textWrites;
                 nativeGate.updateCurrentPositionInfo("native overwrite");

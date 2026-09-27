@@ -110,9 +110,9 @@ public final class RouteInfoPresentationTest {
         for (int view = 0; view < 2; view++) {
             boolean small = view == 1;
             RouteGuidance.State state = route();
-            equal("signpost priority, no road stripping", "\u2039Exit 12: Main Street\u203A",
+            equal("signpost priority, no road stripping", "Exit 12: Main Street",
                 render(bridge, output, state, small, 0).position);
-            equal("unknown ETA retains navigation", "\u2039Exit 12: Main Street\u203A",
+            equal("unknown ETA retains navigation", "Exit 12: Main Street",
                 render(bridge, output, state, small, 1).position);
             state.mExitInfo[0] = " \t\n";
             equal("next road fallback", "\u2191 Main Street", render(bridge, output, state, small, 0).position);
@@ -133,18 +133,17 @@ public final class RouteInfoPresentationTest {
                 render(bridge, output, state, small, 0).position);
             state = route();
             state.mExitInfo[0] = "  Exit\n12\t Main  Street  ";
-            equal("transport whitespace", "\u2039Exit 12 Main Street\u203A", render(bridge, output, state, small, 0).position);
+            equal("transport whitespace", "Exit 12 Main Street", render(bridge, output, state, small, 0).position);
             String[] longSigns = {repeat("x", 120), repeat("\u0416", 70),
                 repeat("\u9053", 31), repeat("x", 89) + "\uD83D\uDE97z",
                 repeat("x", 86) + "\uD83D\uDE97z"};
             for (int i = 0; i < longSigns.length; i++) {
                 state.mExitInfo[0] = longSigns[i];
                 String frame = render(bridge, output, state, small, 0).position;
-                check("every long signpost retains both quotes", frame.startsWith("\u2039") && frame.endsWith("\u203A"));
                 check("overflow is fitted in pixels, not only bytes", frame.length() < longSigns[i].length());
             }
             state.mExitInfo[0] = "Cafe\u0301";
-            equal("composed accent reaches the firmware font", "\u2039Caf\u00E9\u203A",
+            equal("composed accent reaches the firmware font", "Caf\u00E9",
                 render(bridge, output, state, small, 0).position);
         }
 
@@ -157,7 +156,7 @@ public final class RouteInfoPresentationTest {
         String full = render(bridge, output, state, false, 1).position;
         check("full marked arrival and duration in one field", full.startsWith("\u25CC ") && full.endsWith(" | 37 min"));
         check("full marker appears only once", full.indexOf('\u25CC', 1) < 0);
-        equal("next click restores quoted navigation", "\u2039Exit 12: Main Street\u203A",
+        equal("next click restores navigation", "Exit 12: Main Street",
             render(bridge, output, state, false, 0).position);
         set(BAPBridge.class, bridge, "lastEtaSeconds", Long.valueOf(-1));
         set(BAPBridge.class, bridge, "lastTimeRemainingSeconds", Long.valueOf(3900));

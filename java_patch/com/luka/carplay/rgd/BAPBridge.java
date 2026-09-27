@@ -82,8 +82,6 @@ public class BAPBridge {
      * RouteGuidance combines this with renderer FRAME_READY before exposing context 80. */
     private volatile boolean bapSessionStarted = false;
     private static final String ROUTE_TEXT_PENDING = "\u2026";
-    private static final String ROUTE_SIGN_OPEN = "\u2039";
-    private static final String ROUTE_SIGN_CLOSE = "\u203A";
     /* Directional turn arrow prefixes for Virtual Cockpit route text */
     public static final String ARROW_STRAIGHT     = "\u2191 "; // ↑
     public static final String ARROW_LEFT         = "\u2190 "; // ←
@@ -1094,50 +1092,41 @@ public class BAPBridge {
                 }
             }
 
-            /* Emulate navigation deactivation when cruising (> 1000 ft) to close the KDK cutout
-             * in the speedometer dial, while keeping the status bar route text active.
+            /* Suspend maneuver presentation when cruising (> 1000 ft) to close the KDK cutout
+             * in the speedometer dial, while keeping the status bar route text and overall BAP route
+             * active. Full BAP/RouteInfo teardown is reserved for onRouteEnd / onShutdown.
              * Dynamically reactivate when entering the approach zone (<= 1000 ft). */
             if (!nowApproach) {
                 if (com.luka.carplay.core.ScreenModule.isNavActive()) {
-                    Log.i(TAG, "Approach zone EXIT: emulating RG deactivation to close cluster cutout");
+                    Log.i(TAG, "Approach zone EXIT: suspending maneuver presentation");
                     try {
-                        appConnectorNavi.updateRGStatus(0);
-                        appConnectorNavi.updateActiveRGType(0);
                         sendNoSymbol();
                         sendDistanceToManeuverRaw(0, false, 0);
                         sendExitView();
                         appConnectorNavi.updateManeuverState(BAP_MANEUVER_STATE_INACTIVE);
                     } catch (Throwable t) {
-                        Log.w(TAG, "RG deactivation BAP update failed: " + t);
+                        Log.w(TAG, "Approach suspend BAP update failed: " + t);
                     }
-                    forceClusterRouteInfoState(false);
                     com.luka.carplay.core.ScreenModule.setNavActive(false);
                     if (rendererClient != null) {
                         rendererClient.sendClear();
                         lastCrIdx = -1;
                         lastCrIcon = -1;
                     }
+                    synchronized (this) { rendererManeuverPending = false; }
                 }
             } else {
                 if (!com.luka.carplay.core.ScreenModule.isNavActive()) {
                     if (csRef != null) startCustomRenderer();
-                    /* RC#2: use customRendererStarted (set only after isFrameReady() + primer
-                     * succeeds inside startCustomRenderer()) rather than the weaker isReady()
-                     * (TCP handshake only, no eglSwapBuffers ACK).  Opening context 80 while
-                     * customRendererStarted=false means the renderer section of update() is skipped
-                     * entirely (guard: rendererClient != null && customRendererStarted), so the
-                     * maneuver icon is never sent and the backing plate shows an empty box. */
-                    boolean rendererOk = (csRef == null) || customRendererStarted;
+                    boolean rendererOk = (csRef == null)
+                        || (customRendererStarted && rendererClient != null && rendererClient.isFrameReady());
                     if (rendererOk) {
-                        Log.i(TAG, "Approach zone ENTER: reactivating RG for 3D maneuver composition");
-                        forceClusterRouteInfoState(true);
+                        Log.i(TAG, "Approach zone ENTER: activating maneuver presentation");
                         try {
-                            appConnectorNavi.updateRGStatus(1);
-                            appConnectorNavi.updateActiveRGType(ACTIVE_RGTYPE);
                             sendFollowStreet();
                             sendExitView();
                         } catch (Throwable t) {
-                            Log.w(TAG, "RG reactivation BAP update failed: " + t);
+                            Log.w(TAG, "Approach activation BAP update failed: " + t);
                         }
                         com.luka.carplay.core.ScreenModule.setNavActive(true);
                         dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
@@ -1233,15 +1222,15 @@ public class BAPBridge {
             }
 
             /* 4. All route text lives in CurrentPositionInfo (FctID 19).
-             * Phase 0: angle-quoted exit/signpost, else next road, else current road.
+             * Street / signpost text only (FctID 18 handles maneuver distance).
              * Phase 1: compact ETA duration in smallscreen, arrival + duration
-             * in fullscreen. FctID 20 stays empty in both phases. */
+             * in fullscreen. FctID 20 stays empty in both phases.
+             * Distance ticks MUST NOT dirty route text or restart scroll. */
             int routeTextDirty = RouteGuidance.State.DIRTY_CURRENT_ROAD
                 | RouteGuidance.State.DIRTY_MANEUVER_TEXT
                 | RouteGuidance.State.DIRTY_MANEUVER_LIST
                 | RouteGuidance.State.DIRTY_MANEUVER_ICON
-                | RouteGuidance.State.DIRTY_MANEUVER_COUNT
-                | RouteGuidance.State.DIRTY_DIST_MAN;
+                | RouteGuidance.State.DIRTY_MANEUVER_COUNT;
             if (infoPhase != 0) {
                 routeTextDirty |= RouteGuidance.State.DIRTY_DIST_DEST
                     | RouteGuidance.State.DIRTY_TIME_REMAINING
@@ -1435,19 +1424,15 @@ public class BAPBridge {
             }
         }
 
-        /* Preserve the full payload. Decorations are budgeted on EVERY fragment. */
+        /* Preserve the full payload. Street / signpost name only; distance is in FctID 18. */
         positionPrefix = positionSuffix = "";
-        String distStr = (idx >= 0 && s.distManeuverM > 0) ? formatTurnDistanceForText(s.distManeuverM) : "";
         if (signPost.length() > 0) {
-            latchedPositionText = (distStr.length() > 0) ? (signPost + " | " + distStr) : signPost;
-            positionPrefix = ROUTE_SIGN_OPEN;
-            positionSuffix = ROUTE_SIGN_CLOSE;
+            latchedPositionText = signPost;
         } else if (turnTo.length() > 0) {
-            latchedPositionText = (distStr.length() > 0) ? (turnTo + " | " + distStr) : turnTo;
+            latchedPositionText = turnTo;
             positionPrefix = getTurnArrowPrefix(s, idx);
         } else {
-            String road = normalizeRouteText(s.currentRoad);
-            latchedPositionText = (distStr.length() > 0 && road.length() > 0) ? (road + " | " + distStr) : road;
+            latchedPositionText = normalizeRouteText(s.currentRoad);
         }
     }
 
@@ -1477,34 +1462,6 @@ public class BAPBridge {
         }
     }
 
-    private String formatTurnDistanceForText(int meters) {
-        if (meters <= 0) return "";
-        boolean metric = isMetricDistanceUnits();
-        if (metric) {
-            if (meters >= 1000) {
-                int km10 = (meters + 50) / 100;
-                int whole = km10 / 10;
-                int frac = km10 % 10;
-                return (frac > 0) ? (whole + "." + frac + " km") : (whole + " km");
-            } else {
-                int m = (meters < 100) ? ((meters + 5) / 10 * 10) : ((meters + 25) / 50 * 50);
-                return m + " m";
-            }
-        } else {
-            // US Imperial: feet and miles (1 m = 3.28084 ft)
-            long feet = Math.round(meters * 3.28084);
-            if (feet >= 1000) {
-                int tenths = (int) Math.round(feet / 528.0);
-                int whole = tenths / 10;
-                int frac = tenths % 10;
-                return whole + "." + frac + " mi";
-            } else {
-                int ft = (feet < 100) ? (int) ((feet + 5) / 10 * 10) : (int) ((feet + 25) / 50 * 50);
-                if (ft <= 0) ft = 50;
-                return ft + " ft";
-            }
-        }
-    }
 
     private void publishRouteTextForMode() {
         boolean smallScreen = com.luka.carplay.core.ScreenModule.isSmallScreenViewArea();

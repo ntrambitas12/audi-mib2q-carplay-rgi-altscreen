@@ -145,7 +145,7 @@ public final class CurrentPositionDeliveryTest {
             long end = System.nanoTime() + 1600000000L;
             while (f.out.textWrites == writes && System.nanoTime() < end) Thread.sleep(5);
             synchronized (f.rg) {
-                check(f.out.text.startsWith("‹International") && f.confirmed() && f.state.dirtyMask == 0,
+                check(f.out.text.startsWith("International") && f.confirmed() && f.state.dirtyMask == 0,
                     "failed initial publication did not recover cached text");
                 check(f.out.attempts - attempts == 3, "initial-publication retry spun");
                 check(f.deadline() > System.currentTimeMillis() + 1000, "initial recovery lost first hold");
@@ -197,7 +197,7 @@ public final class CurrentPositionDeliveryTest {
             set(bridge, "appConnectorNavi", Proxy.newProxyInstance(getClass().getClassLoader(),
                 new Class[] {CombiBAPServiceNavi.class}, out));
             feed("m0_exit_info:s:" + ROAD + "\n");
-            check(out.text != null && out.text.startsWith("‹North"), "long-road fixture");
+            check(out.text != null && out.text.startsWith("North"), "long-road fixture");
         }
         CurrentPositionScroll scroll() throws Exception { return (CurrentPositionScroll) get(bridge, "positionScroll"); }
         long deadline() throws Exception { return (Long) get(scroll(), "deadline"); }
