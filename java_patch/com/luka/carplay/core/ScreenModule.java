@@ -158,6 +158,27 @@ public final class ScreenModule implements Module {
         }
     }
 
+    /** Unconditional lifecycle rollback: immediately clears routeActive, presentationActive,
+     *  navHidePending, and rebindPending, forcing desiredCtx back to stock (74).
+     *  Unlike setRouteActive(false), this NEVER triggers route-end KDK-hold semantics
+     *  (navHidePending remains false even if KDK is visible). */
+    public static void rollbackRouteLifecycle() {
+        boolean switchPending;
+        synchronized (LOCK) {
+            routeActive = false;
+            presentationActive = false;
+            navHidePending = false;
+            rebindPending = false;
+            rebindReason = "";
+            recomputeDesiredCtxLocked();
+            switchPending = (desiredCtx != currentCtx);
+            LOCK.notifyAll();
+        }
+        if (!switchPending) {
+            com.luka.carplay.cluster.ClusterLayerController.reapply();
+        }
+    }
+
     /** Dynamic maneuver presentation gate owned by BAPBridge approach monitoring.
      *  Active only within approach threshold (<= 305m / <= 1600m) with confirmed frame-ready renderer.
      *  Cruising / approach exit immediately returns desiredCtx to 74 and NEVER latches navHidePending.

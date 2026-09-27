@@ -429,6 +429,8 @@ public final class RouteContextRendererLifecycleTest {
 
         // ============================================================
         // Test 8: Physical Operation Trace & Settlement Invariant
+        // Note: Verifies deterministic state -> applySwitch() -> mocked DM sequence.
+        // Worker concurrency, wakeup arbitration, and bounce sleep are tested in ScreenModuleContextRaceTest.
         // ============================================================
         {
             MockRenderer renderer = new MockRenderer();
@@ -638,6 +640,32 @@ public final class RouteContextRendererLifecycleTest {
             check(!ScreenModule.isPresentationActive(), "T9B: presentationActive must be false after rollback");
             check(!ScreenModule.isNavActive(), "T9B: navActive must be false after rollback");
             check(ScreenModule.getDesiredCtx() == 74, "T9B: desiredCtx must be 74 after rollback");
+
+            // Case 9C: KDK is visible prior to and during a failed onStart() attempt
+            // rollbackRouteLifecycle() MUST NOT trigger route-end KDK-hold semantics
+            com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(true);
+            check(com.luka.carplay.cluster.ClusterLayerController.isKdkVisible(), "T9C precondition: KDK is visible");
+
+            ScreenModule.rollbackRouteLifecycle();
+            check(!ScreenModule.isRouteActive(), "T9C precondition: routeActive false");
+            check(!ScreenModule.isNavHidePending(), "T9C precondition: navHidePending false");
+
+            BAPBridge kdkFailBridge = new BAPBridge();
+            setField(BAPBridge.class, kdkFailBridge, "appConnectorNavi", service);
+            setField(BAPBridge.class, kdkFailBridge, "initialized", Boolean.TRUE);
+            setField(BAPBridge.class, kdkFailBridge, "rendererClient", renderer);
+            setField(BAPBridge.class, kdkFailBridge, "customRendererStarted", Boolean.TRUE);
+            // nativeStopAttempted = false -> startup fails
+            boolean kdkFailStarted = kdkFailBridge.onStart();
+            check(!kdkFailStarted, "T9C: onStart returns false");
+            check(!ScreenModule.isRouteActive(), "T9C: routeActive must be false");
+            check(!ScreenModule.isPresentationActive(), "T9C: presentationActive must be false");
+            check(!ScreenModule.isNavHidePending(), "T9C: navHidePending MUST be false despite visible KDK");
+            check(!ScreenModule.isNavActive(), "T9C: navActive must be false");
+            check(ScreenModule.getDesiredCtx() == 74, "T9C: desiredCtx MUST settle in 74 (no KDK hold)");
+
+            // Cleanup KDK visibility
+            com.luka.carplay.cluster.ClusterLayerController.onVcVisibility(false);
         }
 
         System.out.println("RouteContextRendererLifecycleTest: ALL 9 RENDERER/LIFECYCLE SUITES PASS (" + checks + " checks)");

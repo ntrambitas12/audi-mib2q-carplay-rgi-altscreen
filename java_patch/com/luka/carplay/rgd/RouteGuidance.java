@@ -462,7 +462,7 @@ public class RouteGuidance implements CarplayBus.Listener {
             rgActive = false;
             presentationConfirmed = false;
             routeWantsActive = false;
-            com.luka.carplay.core.ScreenModule.setRouteActive(false);  /* hide layers (stock ctx 74) */
+            com.luka.carplay.core.ScreenModule.rollbackRouteLifecycle();  /* clean drop to 74, no KDK hold */
             hasRouteUpdate = false;
             state.reset();
             return;
@@ -545,8 +545,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 if (rgActive) {
                     com.luka.carplay.core.ScreenModule.setRouteActive(true);
                 } else {
-                    com.luka.carplay.core.ScreenModule.setRouteActive(false);
-                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                    com.luka.carplay.core.ScreenModule.rollbackRouteLifecycle();
                 }
                 /* RC#4: do NOT call setPresentationActive(true) here. In the dynamic-context model,
                  * presentationActive = "open context 80 + dial cutout immediately". That must

@@ -807,8 +807,7 @@ public class BAPBridge {
      * shut; engageTakeover/disengageTakeover own that independently. */
     private void rollbackFailedStart() {
         clearPositionScroll();
-        com.luka.carplay.core.ScreenModule.setRouteActive(false);
-        com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+        com.luka.carplay.core.ScreenModule.rollbackRouteLifecycle();
         com.luka.carplay.core.ScreenModule.setRgdActive(false);
         try { appConnectorNavi.updateRGStatus(0); } catch (Throwable t) { }
         try { appConnectorNavi.updateActiveRGType(0); } catch (Throwable t) { }
@@ -880,8 +879,11 @@ public class BAPBridge {
              * states too — e.g., disconnect mid-route). */
             stopActionBlinkThread();
             inApproachZone = false;
-            com.luka.carplay.core.ScreenModule.setRouteActive(false);
-            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+            if (preserveSurface) {
+                com.luka.carplay.core.ScreenModule.setRouteActive(false);
+            } else {
+                com.luka.carplay.core.ScreenModule.rollbackRouteLifecycle();
+            }
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
