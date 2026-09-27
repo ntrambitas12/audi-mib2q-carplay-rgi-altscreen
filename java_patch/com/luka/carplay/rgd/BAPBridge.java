@@ -690,8 +690,6 @@ public class BAPBridge {
             bapSessionStarted = false;
             clearPositionScroll();
             inApproachZone = false;
-            com.luka.carplay.core.ScreenModule.setRouteActive(true);
-            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
             latchedPositionText = "";
             routeTextPublished = false;
             infoPhase = 0;
@@ -743,6 +741,7 @@ public class BAPBridge {
             if (!nativeStopAttempted || nativeStopWasRouteAbsent) {
                 nativeStopAttempted = tryStopNativeNavigation();
                 if (!nativeStopAttempted) {
+                    rollbackFailedStart();
                     return false;
                 }
             }
@@ -779,6 +778,8 @@ public class BAPBridge {
             Log.i(TAG, "Started (rgType=" + ACTIVE_RGTYPE
                 + ", cr=" + customRendererStarted + ")");
             bapSessionStarted = true;
+            com.luka.carplay.core.ScreenModule.setRouteActive(true);
+            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
             com.luka.carplay.core.ScreenModule.setRgdActive(true);
             /* Keep the VC's empty "---" shell out while route text is pending.
              * Clear the separate FctID 20 layer; never synthesize a text arrow. */
@@ -806,6 +807,8 @@ public class BAPBridge {
      * shut; engageTakeover/disengageTakeover own that independently. */
     private void rollbackFailedStart() {
         clearPositionScroll();
+        com.luka.carplay.core.ScreenModule.setRouteActive(false);
+        com.luka.carplay.core.ScreenModule.setPresentationActive(false);
         com.luka.carplay.core.ScreenModule.setRgdActive(false);
         try { appConnectorNavi.updateRGStatus(0); } catch (Throwable t) { }
         try { appConnectorNavi.updateActiveRGType(0); } catch (Throwable t) { }

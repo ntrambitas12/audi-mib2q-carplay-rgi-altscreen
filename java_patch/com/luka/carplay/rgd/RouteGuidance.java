@@ -544,6 +544,9 @@ public class RouteGuidance implements CarplayBus.Listener {
                 rgActive = bap != null && bap.onStart();
                 if (rgActive) {
                     com.luka.carplay.core.ScreenModule.setRouteActive(true);
+                } else {
+                    com.luka.carplay.core.ScreenModule.setRouteActive(false);
+                    com.luka.carplay.core.ScreenModule.setPresentationActive(false);
                 }
                 /* RC#4: do NOT call setPresentationActive(true) here. In the dynamic-context model,
                  * presentationActive = "open context 80 + dial cutout immediately". That must

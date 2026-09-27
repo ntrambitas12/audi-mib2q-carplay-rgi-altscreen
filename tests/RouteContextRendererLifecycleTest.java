@@ -4,7 +4,9 @@ import com.luka.carplay.rgd.BAPBridge;
 import com.luka.carplay.rgd.RendererMapper;
 import com.luka.carplay.rgd.RendererServer;
 import com.luka.carplay.rgd.RouteGuidance;
+import de.audi.atip.hmi.view.IDisplayManager;
 import de.audi.atip.interapp.combi.bap.navi.CombiBAPServiceNavi;
+import de.audi.tghu.fwhmi.IDisplayManagerKombiControl;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -171,6 +173,8 @@ public final class RouteContextRendererLifecycleTest {
         setField(BAPBridge.class, bridge, "appConnectorNavi", service);
         setField(BAPBridge.class, bridge, "initialized", Boolean.TRUE);
         setField(BAPBridge.class, bridge, "bapSessionStarted", Boolean.TRUE);
+        setField(BAPBridge.class, bridge, "nativeStopAttempted", Boolean.TRUE);
+        setField(BAPBridge.class, bridge, "csRef", createClusterService());
         if (renderer != null) {
             setField(BAPBridge.class, bridge, "rendererClient", renderer);
             setField(BAPBridge.class, bridge, "customRendererStarted", Boolean.TRUE);
@@ -411,6 +415,8 @@ public final class RouteContextRendererLifecycleTest {
             ScreenModule.setNavActive(false);
 
             // Session 2 connects with identical gen 500 at 200m
+            setField(BAPBridge.class, bridge, "rendererClient", renderer);
+            setField(BAPBridge.class, bridge, "customRendererStarted", Boolean.TRUE);
             bridge.onStart();
             collector.clear();
             RouteGuidance.State s2 = createState(500L, 1, 500L, 1, -90, 200, 1);
@@ -432,6 +438,28 @@ public final class RouteContextRendererLifecycleTest {
             ScreenModule.setRouteActive(true);
             setSimulatedPresentationActive(false);
 
+            // Mock DisplayManager to record actual physical compositor switches
+            final List physicalDmSwitches = new ArrayList();
+            IDisplayManager mockDm = (IDisplayManager) Proxy.newProxyInstance(
+                RouteContextRendererLifecycleTest.class.getClassLoader(),
+                new Class[]{IDisplayManager.class, IDisplayManagerKombiControl.class},
+                new InvocationHandler() {
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        if ("switchContext".equals(method.getName())) {
+                            physicalDmSwitches.add(args[0]);
+                        }
+                        Class type = method.getReturnType();
+                        if (type == Boolean.TYPE) return Boolean.FALSE;
+                        if (type == Integer.TYPE) return new Integer(0);
+                        return null;
+                    }
+                });
+            Method applySwitchMethod = ScreenModule.class.getDeclaredMethod("applySwitch",
+                new Class[]{Integer.TYPE, IDisplayManager.class});
+            applySwitchMethod.setAccessible(true);
+            ScreenModule sm = new ScreenModule();
+            setField(ScreenModule.class, sm, "dm", mockDm);
+
             // 1. Initial approach entry with frame-ready renderer
             renderer.mockFrameReady = true;
             RouteGuidance.State s1 = createState(2000L, 1, 2000L, 1, -90, 200, 1);
@@ -440,24 +468,30 @@ public final class RouteContextRendererLifecycleTest {
             check(ScreenModule.getDesiredCtx() == 80, "T8: desiredCtx is 80 in approach");
 
             renderer.trace.clear();
+            final List logicalLifecycleTrace = new ArrayList();
 
-            // 2. Approach exit -> triggers CLEAR, FRAME_CLEARED, CTX_74
+            // 2. Approach exit -> triggers CLEAR, FRAME_CLEARED, DESIRED_CTX_74
             RouteGuidance.State sFar = createState(2000L, 1, 2000L, 1, -90, 500, 1);
             bridge.update(sFar);
             check(renderer.trace.contains("CLEAR"), "T8: CLEAR sent to renderer on approach exit");
+            logicalLifecycleTrace.add("CLEAR");
 
             // Hardware completes frame clearing
             renderer.notifyFrameCleared();
             check(renderer.trace.contains("FRAME_CLEARED"), "T8: FRAME_CLEARED recorded");
+            logicalLifecycleTrace.add("FRAME_CLEARED");
 
             check(!ScreenModule.isPresentationActive(), "T8: presentation deactivated");
             check(ScreenModule.getDesiredCtx() == 74, "T8: desiredCtx returned to 74");
-            renderer.trace.add("CTX_74");
+            logicalLifecycleTrace.add("DESIRED_CTX_74");
+            // Execute physical switch for desiredCtx=74
+            applySwitchMethod.invoke(sm, new Object[]{new Integer(ScreenModule.getDesiredCtx()), mockDm});
 
             // 3. New maneuver arrives inside approach (200m) while frame is not yet ready
             RouteGuidance.State sNewMan = createState(2000L, 1, 2000L, 2, 45, 200, 2);
             bridge.update(sNewMan);
             check(renderer.trace.contains("MANEUVER"), "T8: MANEUVER sent to renderer");
+            logicalLifecycleTrace.add("MANEUVER");
 
             // Presentation held inactive while renderer is rasterizing (not frame-ready)
             check(!ScreenModule.isPresentationActive(), "T8: presentation held inactive while not frame-ready");
@@ -466,24 +500,44 @@ public final class RouteContextRendererLifecycleTest {
             // 4. Renderer signals swap completion / FRAME_READY
             renderer.notifyFrameReady();
             check(renderer.trace.contains("FRAME_READY"), "T8: FRAME_READY recorded");
+            logicalLifecycleTrace.add("FRAME_READY");
 
             // Next distance tick triggers context transition to 80
             RouteGuidance.State sTick = createState(2000L, 1, 2000L, 2, 45, 195, 2);
             bridge.update(sTick);
             check(ScreenModule.isPresentationActive(), "T8: presentation activated on frame readiness");
             check(ScreenModule.getDesiredCtx() == 80, "T8: desiredCtx switched to 80");
-            renderer.trace.add("CTX_80");
+            logicalLifecycleTrace.add("DESIRED_CTX_80");
+            // Execute physical switch for desiredCtx=80
+            applySwitchMethod.invoke(sm, new Object[]{new Integer(ScreenModule.getDesiredCtx()), mockDm});
 
-            // Verify the physical trace sequence
-            List expected = new ArrayList();
-            expected.add("CLEAR");
-            expected.add("FRAME_CLEARED");
-            expected.add("CTX_74");
-            expected.add("MANEUVER");
-            expected.add("FRAME_READY");
-            expected.add("CTX_80");
-            check(renderer.trace.equals(expected),
-                "T8: physical trace mismatch!\nExpected: " + expected + "\nActual:   " + renderer.trace);
+            // A. Verify renderer IPC command trace (pure renderer calls)
+            List expectedRendererTrace = new ArrayList();
+            expectedRendererTrace.add("CLEAR");
+            expectedRendererTrace.add("FRAME_CLEARED");
+            expectedRendererTrace.add("MANEUVER");
+            expectedRendererTrace.add("FRAME_READY");
+            check(renderer.trace.equals(expectedRendererTrace),
+                "T8: renderer IPC trace mismatch!\nExpected: " + expectedRendererTrace + "\nActual:   " + renderer.trace);
+
+            // B. Verify logical lifecycle event sequence
+            List expectedLogicalTrace = new ArrayList();
+            expectedLogicalTrace.add("CLEAR");
+            expectedLogicalTrace.add("FRAME_CLEARED");
+            expectedLogicalTrace.add("DESIRED_CTX_74");
+            expectedLogicalTrace.add("MANEUVER");
+            expectedLogicalTrace.add("FRAME_READY");
+            expectedLogicalTrace.add("DESIRED_CTX_80");
+            check(logicalLifecycleTrace.equals(expectedLogicalTrace),
+                "T8: logical lifecycle trace mismatch!\nExpected: " + expectedLogicalTrace + "\nActual:   " + logicalLifecycleTrace);
+
+            // C. Verify physical DisplayManager compositor switches (74 -> 72 bounce -> 80)
+            List expectedDmSwitches = new ArrayList();
+            expectedDmSwitches.add(new Integer(74));
+            expectedDmSwitches.add(new Integer(72)); // bounce context
+            expectedDmSwitches.add(new Integer(80)); // target cluster context
+            check(physicalDmSwitches.equals(expectedDmSwitches),
+                "T8: physical DM switch trace mismatch!\nExpected: " + expectedDmSwitches + "\nActual:   " + physicalDmSwitches);
 
             // ============================================================
             // INVARIANT: Cannot settle in ctx 80 when renderer readiness is withdrawn
@@ -511,8 +565,81 @@ public final class RouteContextRendererLifecycleTest {
             check(!ScreenModule.isRouteActive(), "T8 INV: routeActive remains false");
             check(!ScreenModule.isPresentationActive(), "T8 INV: presentationActive remains false");
             check(ScreenModule.getDesiredCtx() == 74, "T8 INV: desiredCtx remains 74");
+            setField(ScreenModule.class, sm, "dm", null);
         }
 
-        System.out.println("RouteContextRendererLifecycleTest: ALL 8 RENDERER/LIFECYCLE SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 9: BAPBridge onStart() Failure Rollback & State Isolation
+        // ============================================================
+        {
+            // Case 9A: tryStopNativeNavigation() fails -> onStart() returns false
+            // routeActive, presentationActive, and navActive must remain false
+            ScreenModule.setRouteActive(false);
+            ScreenModule.setPresentationActive(false);
+
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = new BAPBridge();
+            CombiBAPServiceNavi service = (CombiBAPServiceNavi) Proxy.newProxyInstance(
+                RouteContextRendererLifecycleTest.class.getClassLoader(),
+                new Class[]{CombiBAPServiceNavi.class},
+                new BapProxyHandler());
+            setField(BAPBridge.class, bridge, "appConnectorNavi", service);
+            setField(BAPBridge.class, bridge, "initialized", Boolean.TRUE);
+            setField(BAPBridge.class, bridge, "rendererClient", renderer);
+            setField(BAPBridge.class, bridge, "customRendererStarted", Boolean.TRUE);
+            // Notice: nativeStopAttempted = false and csRef = null -> tryStopNativeNavigation returns false
+            boolean started = bridge.onStart();
+            check(!started, "T9A: onStart must return false when nativeStop fails");
+            check(!ScreenModule.isRouteActive(), "T9A: routeActive must remain false after failed onStart");
+            check(!ScreenModule.isPresentationActive(), "T9A: presentationActive must remain false after failed onStart");
+            check(!ScreenModule.isNavActive(), "T9A: navActive must remain false after failed onStart");
+            check(ScreenModule.getDesiredCtx() == 74, "T9A: desiredCtx must remain 74 after failed onStart");
+
+            // Verify that a late/stale presentation callback cannot activate presentation or context 80
+            ScreenModule.setPresentationActive(true);
+            check(!ScreenModule.isRouteActive(), "T9A: late presentation call cannot resurrect routeActive");
+            check(!ScreenModule.isPresentationActive(), "T9A: late presentation call rejected when routeActive is false");
+            check(!ScreenModule.isNavActive(), "T9A: navActive remains false");
+            check(ScreenModule.getDesiredCtx() == 74, "T9A: desiredCtx remains 74");
+
+            // Case 9B: Exception thrown during onStart() -> caught and rolled back
+            final boolean[] rgiStatusReset = new boolean[]{false};
+            CombiBAPServiceNavi throwingService = (CombiBAPServiceNavi) Proxy.newProxyInstance(
+                RouteContextRendererLifecycleTest.class.getClassLoader(),
+                new Class[]{CombiBAPServiceNavi.class},
+                new InvocationHandler() {
+                    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                        if ("updateRGStatus".equals(method.getName())) {
+                            int status = ((Integer) args[0]).intValue();
+                            if (status == 1) {
+                                throw new RuntimeException("Simulated BAP bus fault");
+                            } else if (status == 0) {
+                                rgiStatusReset[0] = true;
+                            }
+                        }
+                        Class type = method.getReturnType();
+                        if (type == Boolean.TYPE) return Boolean.FALSE;
+                        if (type == Integer.TYPE) return new Integer(0);
+                        return null;
+                    }
+                });
+            BAPBridge throwingBridge = new BAPBridge();
+            setField(BAPBridge.class, throwingBridge, "appConnectorNavi", throwingService);
+            setField(BAPBridge.class, throwingBridge, "initialized", Boolean.TRUE);
+            setField(BAPBridge.class, throwingBridge, "rendererClient", renderer);
+            setField(BAPBridge.class, throwingBridge, "customRendererStarted", Boolean.TRUE);
+            setField(BAPBridge.class, throwingBridge, "nativeStopAttempted", Boolean.TRUE); // bypass nativeStop
+            setField(BAPBridge.class, throwingBridge, "csRef", createClusterService());
+
+            boolean throwingStarted = throwingBridge.onStart();
+            check(!throwingStarted, "T9B: onStart must return false when exception thrown");
+            check(rgiStatusReset[0], "T9B: rollbackFailedStart reset RGStatus to 0");
+            check(!ScreenModule.isRouteActive(), "T9B: routeActive must be false after rollback");
+            check(!ScreenModule.isPresentationActive(), "T9B: presentationActive must be false after rollback");
+            check(!ScreenModule.isNavActive(), "T9B: navActive must be false after rollback");
+            check(ScreenModule.getDesiredCtx() == 74, "T9B: desiredCtx must be 74 after rollback");
+        }
+
+        System.out.println("RouteContextRendererLifecycleTest: ALL 9 RENDERER/LIFECYCLE SUITES PASS (" + checks + " checks)");
     }
 }
