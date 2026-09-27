@@ -56,8 +56,10 @@ public final class ScreenModuleContextRaceTest {
         volatile int currentContextId = 74;
         volatile boolean throwOnBounce = false;
         volatile boolean throwOnTarget = false;
+        volatile boolean throwOnRate = false;
         volatile Runnable onBounceAction = null;
         volatile Runnable onTargetAction = null;
+        volatile Runnable onRateAction = null;
 
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             String name = method.getName();
@@ -87,6 +89,14 @@ public final class ScreenModuleContextRaceTest {
                 return null;
             } else if ("setUpdateRate".equals(name)) {
                 rateCalls.add(args[1]);
+                if (onRateAction != null) {
+                    Runnable action = onRateAction;
+                    onRateAction = null;
+                    try { action.run(); } catch (Throwable ignored) {}
+                }
+                if (throwOnRate) {
+                    throw new RuntimeException("Simulated hardware error on setUpdateRate");
+                }
                 return null;
             } else if ("getCurrentContextID".equals(name)) {
                 return new Integer(currentContextId);
@@ -622,6 +632,51 @@ public final class ScreenModuleContextRaceTest {
             synchronized (lock) { setField(ScreenModule.class, sm, "dm", null); }
         }
 
-        System.out.println("ScreenModuleContextRaceTest: ALL 12 CONCURRENCY/RACE SUITES PASS (" + checks + " checks)");
+        // ============================================================
+        // Test 13: Exception in setUpdateRate Clears Both currentCtx and clusterActive
+        // ============================================================
+        {
+            final ScreenModule sm = new ScreenModule();
+            final TestDisplayManagerHandler dmHandler = new TestDisplayManagerHandler();
+            dmHandler.throwOnRate = true;
+            IDisplayManager mockDm = createMockDm(dmHandler);
+
+            setField(ScreenModule.class, sm, "enabled", Boolean.TRUE);
+            synchronized (lock) {
+                setField(ScreenModule.class, sm, "dm", mockDm);
+                setField(ScreenModule.class, null, "connected", Boolean.TRUE);
+                setField(ScreenModule.class, null, "navActive", Boolean.TRUE);
+                setField(ScreenModule.class, null, "desiredCtx", new Integer(80));
+                setField(ScreenModule.class, null, "currentCtx", new Integer(74));
+            }
+            startWorker(sm);
+
+            // Wait for first switch attempt where setUpdateRate throws:
+            // 72 (bounce) -> 80 (switchContext) -> setUpdateRate throws -> outer catch resets currentCtx = -1 AND clusterActive = false
+            long deadline = System.currentTimeMillis() + 1500;
+            while (dmHandler.rateCalls.size() < 1 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+
+            // Assert: during exception recovery, currentCtx is -1 and clusterActive is explicitly false
+            check(ScreenModule.getCurrentCtx() == -1, "T13: currentCtx is -1 during recovery");
+            check(!ScreenModule.isClusterActive(), "T13: clusterActive is false during recovery (no stale active state)");
+
+            // Now allow recovery:
+            dmHandler.throwOnRate = false;
+            deadline = System.currentTimeMillis() + 1500;
+            while (ScreenModule.getCurrentCtx() != 80 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+
+            check(ScreenModule.getCurrentCtx() == 80, "T13: currentCtx recovered to 80");
+            check(ScreenModule.isClusterActive(), "T13: clusterActive is true after recovery");
+
+            sm.stop();
+            // Reset
+            synchronized (lock) { setField(ScreenModule.class, sm, "dm", null); }
+        }
+
+        System.out.println("ScreenModuleContextRaceTest: ALL 13 CONCURRENCY/RACE SUITES PASS (" + checks + " checks)");
     }
 }

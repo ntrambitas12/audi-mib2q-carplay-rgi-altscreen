@@ -248,6 +248,10 @@ public final class ScreenModule implements Module {
         return navHidePending;
     }
 
+    public static boolean isClusterActive() {
+        return clusterActive;
+    }
+
     public static int getDesiredCtx() {
         synchronized (LOCK) {
             return desiredCtx;
@@ -371,6 +375,7 @@ public final class ScreenModule implements Module {
             presentationActive = false;
             navHidePending = false;
             rgdActive = false;
+            clusterActive = false;
             recomputeDesiredCtxLocked();
         }
         synchronized (LOCK) {
@@ -402,6 +407,7 @@ public final class ScreenModule implements Module {
             rgdActive = false;
             rebindPending = false;
             rebindReason = "";
+            clusterActive = false;
         }
         republish();
     }
@@ -451,6 +457,7 @@ public final class ScreenModule implements Module {
                     synchronized (LOCK) {
                         if (dm == d && desiredCtx == target && currentCtx == target) {
                             currentCtx = -1;
+                            clusterActive = false;
                             retry = true;
                             LOCK.notifyAll();
                         }
@@ -486,6 +493,7 @@ public final class ScreenModule implements Module {
                 synchronized (LOCK) {
                     if (dm != d || desiredCtx != ctx) {
                         currentCtx = -1;
+                        clusterActive = false;
                         Log.i(TAG, "switch(" + ctx + ") superseded during bounce → " + desiredCtx);
                         return;
                     }
@@ -536,7 +544,10 @@ public final class ScreenModule implements Module {
             Log.i(TAG, "cluster -> ctx " + ctx + " (active=" + clusterActive + ")");
         } catch (Throwable t) {
             Log.w(TAG, "switch(" + ctx + ") failed: " + t);
-            synchronized (LOCK) { currentCtx = -1; }
+            synchronized (LOCK) {
+                currentCtx = -1;
+                clusterActive = false;
+            }
             /* Throttle the retry: the bounce write and the stock path have no settle sleep, so a
              * persistently-throwing switchContext would otherwise hot-spin (busy loop + log flood). */
             try { Thread.sleep(BOUNCE_SLEEP_MS); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
