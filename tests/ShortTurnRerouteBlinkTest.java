@@ -17,7 +17,7 @@ import java.util.Random;
  * Reproduction attempt for the field bug: "rerouting on very SHORT turns leaves the
  * maneuver pill (ctx 80, maneuver_render) open and completely black until a full
  * viewport close/open". Distances under ~91 m (300 ft), especially in the BLINK
- * zone (BAPBridge.isInBlinkZone: 1..30 m for the city 305 m denominator).
+ * zone (BAPBridge.isInBlinkZone: 1..30 m for the city 457 m denominator).
  *
  * The earlier RerouteRendererRecoveryTest only exercised the NON-blink path.
  * This test drives the real BAPBridge with the same fixtures (fake renderer, BAP
@@ -423,7 +423,7 @@ public final class ShortTurnRerouteBlinkTest {
     }
 
     private static boolean isBlink(int distM) {
-        return distM > 0 && distM <= 30;  // 305 m city denominator, 3048 cm cap, pct<20
+        return distM > 0 && distM <= 30;  // 457 m city denominator, 3048 cm cap, pct<20
     }
 
     /** Real 600 ms BAPActionBlink worker runs between reroute steps (bounded waits). */

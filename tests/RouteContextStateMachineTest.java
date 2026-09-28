@@ -128,36 +128,36 @@ public final class RouteContextStateMachineTest {
             bridge.update(s2);
             check(collector.count() == 0, "T1.2: route_state 5 must not rebind");
 
-            // Step 3: new generation 101, distance 483m (~0.3 mi), no route_state
-            RouteGuidance.State s3 = createState(101L, 5, 1, 1, 483);
+            // Step 3: new generation 101, distance 660m (~0.4 mi), no route_state
+            RouteGuidance.State s3 = createState(101L, 5, 1, 1, 660);
             s3.routeStateGeneration = -1L; // unauthenticated state 5 from previous route
             bridge.update(s3);
-            check(collector.count() == 0, "T1.3: new gen 101 at 483m must NEVER rebind");
-            check(!ScreenModule.isNavActive(), "T1.3: 483m city turn must exit approach (settles in ctx 74)");
+            check(collector.count() == 0, "T1.3: new gen 101 at 660m must NEVER rebind");
+            check(!ScreenModule.isNavActive(), "T1.3: 660m city turn must exit approach (settles in ctx 74)");
 
-            // Step 4: approach vehicle travel 400m, 350m, 306m -> stays 74
-            RouteGuidance.State s400 = createState(101L, 1, 1, 1, 400);
-            bridge.update(s400);
-            check(!ScreenModule.isNavActive(), "T1.4: 400m stays ctx 74");
+            // Step 4: approach vehicle travel 600m, 500m, 458m -> stays 74
+            RouteGuidance.State s600 = createState(101L, 1, 1, 1, 600);
+            bridge.update(s600);
+            check(!ScreenModule.isNavActive(), "T1.4: 600m stays ctx 74");
 
-            RouteGuidance.State s350 = createState(101L, 1, 1, 1, 350);
-            bridge.update(s350);
-            check(!ScreenModule.isNavActive(), "T1.4: 350m outside approach stays ctx 74");
+            RouteGuidance.State s500 = createState(101L, 1, 1, 1, 500);
+            bridge.update(s500);
+            check(!ScreenModule.isNavActive(), "T1.4: 500m outside approach stays ctx 74");
 
-            RouteGuidance.State s306 = createState(101L, 1, 1, 1, 306);
-            bridge.update(s306);
-            check(!ScreenModule.isNavActive(), "T1.4: 306m stays ctx 74");
+            RouteGuidance.State s458 = createState(101L, 1, 1, 1, 458);
+            bridge.update(s458);
+            check(!ScreenModule.isNavActive(), "T1.4: 458m stays ctx 74");
             check(collector.count() == 0, "T1.4: cruising must not rebind");
 
-            // Step 5: crossing threshold: 305m -> enters ctx 80 cleanly without forced rebind
-            RouteGuidance.State s305 = createState(101L, 1, 1, 1, 305);
-            bridge.update(s305);
-            check(ScreenModule.isNavActive(), "T1.5: 305m enters ctx 80 cleanly");
+            // Step 5: crossing threshold: 457m -> enters ctx 80 cleanly without forced rebind
+            RouteGuidance.State s457 = createState(101L, 1, 1, 1, 457);
+            bridge.update(s457);
+            check(ScreenModule.isNavActive(), "T1.5: 457m enters ctx 80 cleanly");
             check(collector.count() == 0, "T1.5: normal approach entry does NOT do 72->80 rebind");
 
-            RouteGuidance.State s304 = createState(101L, 1, 1, 1, 304);
-            bridge.update(s304);
-            check(ScreenModule.isNavActive(), "T1.5: 304m stays ctx 80");
+            RouteGuidance.State s456 = createState(101L, 1, 1, 1, 456);
+            bridge.update(s456);
+            check(ScreenModule.isNavActive(), "T1.5: 456m stays ctx 80");
             check(collector.count() == 0, "T1.5: no rebind on distance updates");
         }
 
@@ -180,10 +180,10 @@ public final class RouteContextStateMachineTest {
             bridge.update(s201_empty);
             check(collector.count() == 0, "T2.1: empty gen 201 must not rebind prematurely");
 
-            // Delta 2: gen 201 maneuver arrives with distance 483m (outside approach)
-            RouteGuidance.State s201_far = createState(201L, 1, 1, 1, 483);
+            // Delta 2: gen 201 maneuver arrives with distance 660m (outside approach)
+            RouteGuidance.State s201_far = createState(201L, 1, 1, 1, 660);
             bridge.update(s201_far);
-            check(collector.count() == 0, "T2.2: gen 201 at 483m must cancel rebind and not trigger");
+            check(collector.count() == 0, "T2.2: gen 201 at 660m must cancel rebind and not trigger");
 
             // Opposite: gen 202 arrives empty, then arrives at 200m (inside approach)
             setSimulatedPresentationActive(true);
@@ -252,7 +252,7 @@ public final class RouteContextStateMachineTest {
         // Test 5: New route outside approach must NEVER rebind (fuzz city distances)
         // ============================================================
         {
-            int[] farDistances = new int[]{306, 350, 400, 483, 500, 800, 1000, 1500, 3000};
+            int[] farDistances = new int[]{458, 460, 470, 483, 500, 800, 1000, 1500, 3000};
             for (int i = 0; i < farDistances.length; i++) {
                 BAPBridge bridge = createBridge();
                 collector.clear();
@@ -267,32 +267,32 @@ public final class RouteContextStateMachineTest {
         }
 
         // ============================================================
-        // Test 6: Boundary fuzzing and hysteresis around 305m (City)
+        // Test 6: Boundary fuzzing and hysteresis around 457m (City)
         // ============================================================
         {
             BAPBridge bridge = createBridge();
             collector.clear();
 
-            // Fresh state outside approach: 307m, 306m -> outside
-            bridge.update(createState(600L, 1, 1, 1, 307));
-            check(!ScreenModule.isNavActive(), "T6: 307m is outside");
-            bridge.update(createState(600L, 1, 1, 1, 306));
-            check(!ScreenModule.isNavActive(), "T6: 306m is outside");
+            // Fresh state outside approach: 459m, 458m -> outside
+            bridge.update(createState(600L, 1, 1, 1, 459));
+            check(!ScreenModule.isNavActive(), "T6: 459m is outside");
+            bridge.update(createState(600L, 1, 1, 1, 458));
+            check(!ScreenModule.isNavActive(), "T6: 458m is outside");
 
-            // 305m -> enters approach
-            bridge.update(createState(600L, 1, 1, 1, 305));
-            check(ScreenModule.isNavActive(), "T6: 305m enters approach");
+            // 457m -> enters approach
+            bridge.update(createState(600L, 1, 1, 1, 457));
+            check(ScreenModule.isNavActive(), "T6: 457m enters approach");
 
-            // Hysteresis test: once in approach, stays in approach up to 305 + 50 = 355m
-            int[] insideHysteresis = new int[]{306, 320, 340, 350, 354, 355};
+            // Hysteresis test: once in approach, stays in approach up to 457 + 50 = 507m
+            int[] insideHysteresis = new int[]{458, 470, 490, 500, 506, 507};
             for (int i = 0; i < insideHysteresis.length; i++) {
                 bridge.update(createState(600L, 1, 1, 1, insideHysteresis[i]));
                 check(ScreenModule.isNavActive(), "T6: " + insideHysteresis[i] + "m within 50m hysteresis buffer");
             }
 
-            // 356m -> exits approach
-            bridge.update(createState(600L, 1, 1, 1, 356));
-            check(!ScreenModule.isNavActive(), "T6: 356m exits approach (> 355m)");
+            // 508m -> exits approach
+            bridge.update(createState(600L, 1, 1, 1, 508));
+            check(!ScreenModule.isNavActive(), "T6: 508m exits approach (> 507m)");
         }
 
         // ============================================================
@@ -360,9 +360,9 @@ public final class RouteContextStateMachineTest {
             check(collector.count() == 0, "T9: gen change at 600m must NOT rebind");
             check(!ScreenModule.isNavActive(), "T9: remains in ctx 74");
 
-            // Later reaches 305m -> normal 74 -> 80
-            bridge.update(createState(901L, 1, 1, 1, 305));
-            check(ScreenModule.isNavActive(), "T9: 305m normal 74->80");
+            // Later reaches 457m -> normal 74 -> 80
+            bridge.update(createState(901L, 1, 1, 1, 457));
+            check(ScreenModule.isNavActive(), "T9: 457m normal 74->80");
             check(collector.count() == 0, "T9: normal 74->80 does not rebind");
         }
 
@@ -495,11 +495,11 @@ public final class RouteContextStateMachineTest {
             // 2. Route start at 500m (outside approach)
             bridge.update(createState(1400L, 1, 1, 1, 500));
             trace.append(ScreenModule.isNavActive() ? "80" : "74").append(" -> ");
-            // 3. Cruising to 305m (enters approach)
-            bridge.update(createState(1400L, 1, 1, 1, 305));
+            // 3. Cruising to 457m (enters approach)
+            bridge.update(createState(1400L, 1, 1, 1, 457));
             trace.append(ScreenModule.isNavActive() ? "80" : "74").append(" -> ");
-            // 4. Reroute outside approach: gen 1401 at 483m
-            RouteGuidance.State rOut = createState(1401L, 5, 1, 1, 483);
+            // 4. Reroute outside approach: gen 1401 at 660m
+            RouteGuidance.State rOut = createState(1401L, 5, 1, 1, 660);
             rOut.routeStateGeneration = -1L;
             bridge.update(rOut);
             trace.append(ScreenModule.isNavActive() ? "80" : "74").append(" -> ");
@@ -569,7 +569,7 @@ public final class RouteContextStateMachineTest {
 
                 // INVARIANT 2: A generation change outside approach must never directly request a context rebind
                 boolean isHighway = (mType == 8 || mType == 9 || mType == 22 || mType == 23 || mType == 51 || mType == 52 || mType == 53);
-                int limit = isHighway ? 1600 : 305;
+                int limit = isHighway ? 1600 : 457;
                 int effectiveLimit = wasActive ? (limit + 50) : limit;
                 if (dist > effectiveLimit && manCount > 0) {
                     check(newRebinds == 0, "INV2: distance " + dist + " > " + effectiveLimit + " must not trigger rebind");
@@ -734,7 +734,7 @@ public final class RouteContextStateMachineTest {
             boolean shouldClear = (manCount == 0 && rState <= 0) || isRerouting;
 
             boolean isHighway = (mType == 8 || mType == 9 || mType == 22 || mType == 23 || mType == 51 || mType == 52 || mType == 53);
-            int baseThreshold = isHighway ? 1600 : 305;
+            int baseThreshold = isHighway ? 1600 : 457;
             int effectiveThreshold = inApproach ? (baseThreshold + 50) : baseThreshold;
 
             boolean hasUsableDistance = (distM >= 0);

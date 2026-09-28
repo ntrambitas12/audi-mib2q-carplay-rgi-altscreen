@@ -355,15 +355,15 @@ public final class RouteContextRendererLifecycleTest {
             bridge.update(sHighway);
             check(ScreenModule.isNavActive(), "T5.1: 1000m highway ramp enters approach");
 
-            // 2. Primary maneuver becomes city turn at 1000m -> outside 305m city threshold -> exits to 74
+            // 2. Primary maneuver becomes city turn at 1000m -> outside 457m city threshold -> exits to 74
             RouteGuidance.State sCity = createState(400L, 1, 400L, 1, -90, 1000, 2); // MT_LEFT_TURN (1)
             bridge.update(sCity);
             check(!ScreenModule.isNavActive(), "T5.2: 1000m city turn exits approach (drops to 74)");
 
-            // 3. Cruising reaches 305m -> enters city approach
-            RouteGuidance.State sCityNear = createState(400L, 1, 400L, 1, -90, 305, 2);
+            // 3. Cruising reaches 457m -> enters city approach
+            RouteGuidance.State sCityNear = createState(400L, 1, 400L, 1, -90, 457, 2);
             bridge.update(sCityNear);
-            check(ScreenModule.isNavActive(), "T5.3: 305m city turn re-enters approach");
+            check(ScreenModule.isNavActive(), "T5.3: 457m city turn re-enters approach");
         }
 
         // ============================================================
@@ -473,7 +473,7 @@ public final class RouteContextRendererLifecycleTest {
             final List logicalLifecycleTrace = new ArrayList();
 
             // 2. Approach exit -> triggers CLEAR, FRAME_CLEARED, DESIRED_CTX_74
-            RouteGuidance.State sFar = createState(2000L, 1, 2000L, 1, -90, 500, 1);
+            RouteGuidance.State sFar = createState(2000L, 1, 2000L, 1, -90, 600, 1);
             bridge.update(sFar);
             check(renderer.trace.contains("CLEAR"), "T8: CLEAR sent to renderer on approach exit");
             logicalLifecycleTrace.add("CLEAR");

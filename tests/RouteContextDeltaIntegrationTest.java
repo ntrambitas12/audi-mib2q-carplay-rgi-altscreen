@@ -277,7 +277,7 @@ public final class RouteContextDeltaIntegrationTest {
         ClusterLayerController.onVcVisibility(false); // No KDK hide delay in standard context tests
 
         // ============================================================
-        // Suite 1: Fragmented Reroute Sequence A (Delayed maneuver delivery, 0.3 mi / 483 m)
+        // Suite 1: Fragmented Reroute Sequence A (Delayed maneuver delivery, 483 m: just outside the 457 m city zone)
         // ============================================================
         {
             MockRenderer renderer = new MockRenderer();
@@ -320,22 +320,22 @@ public final class RouteContextDeltaIntegrationTest {
             feed(rg, parseMethod, state, bridge, "m0_type:n:1\n");
             check(collector.count() == 0, "S1.4: fragmented parts trigger no rebind");
 
-            // Step 7: Distance 483m (~0.3 mi) arrives -> resolved OUTSIDE approach
+            // Step 7: Distance 483m (~0.3 mi, just outside the 457 m city boundary) arrives -> resolved OUTSIDE approach
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
             check(!ScreenModule.isNavActive(), "S1.7: 483m stays in ctx 74");
             check(collector.count() == 0, "S1.7: 483m cancels pending rebind permanently, zero rebinds");
 
-            // Step 8: Travel toward turn outside approach: 400m, 350m, 306m
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:400\n");
-            check(!ScreenModule.isNavActive() && collector.count() == 0, "S1.8: 400m stays 74, no rebind");
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:350\n");
-            check(!ScreenModule.isNavActive() && collector.count() == 0, "S1.8: 350m stays 74, no rebind");
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:306\n");
-            check(!ScreenModule.isNavActive() && collector.count() == 0, "S1.8: 306m stays 74, no rebind");
+            // Step 8: Travel toward turn outside approach: 600m, 500m, 458m
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:600\n");
+            check(!ScreenModule.isNavActive() && collector.count() == 0, "S1.8: 600m stays 74, no rebind");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:500\n");
+            check(!ScreenModule.isNavActive() && collector.count() == 0, "S1.8: 500m stays 74, no rebind");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:458\n");
+            check(!ScreenModule.isNavActive() && collector.count() == 0, "S1.8: 458m stays 74, no rebind");
 
-            // Step 9: Reach 305m (city approach threshold)
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:305\n");
-            check(ScreenModule.isNavActive(), "S1.9: 305m enters approach (ctx 80)");
+            // Step 9: Reach 457m (city approach threshold)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:457\n");
+            check(ScreenModule.isNavActive(), "S1.9: 457m enters approach (ctx 80)");
             check(collector.count() == 0, "S1.9: clean 74->80 acquisition, ZERO forced rebinds!");
         }
 
@@ -386,7 +386,7 @@ public final class RouteContextDeltaIntegrationTest {
         }
 
         // ============================================================
-        // Suite 3: 0.3-Mile Boundary Hysteresis with Unit Equivalence
+        // Suite 3: 457 m (1500 ft) City Boundary Hysteresis with Unit Equivalence
         // ============================================================
         {
             BAPBridge bridge = createBridge(null);
@@ -405,23 +405,23 @@ public final class RouteContextDeltaIntegrationTest {
             check(!ScreenModule.isNavActive(), "S3: 484m outside approach");
 
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
-            check(!ScreenModule.isNavActive(), "S3: 483m (~0.30 mi) outside approach");
+            check(!ScreenModule.isNavActive(), "S3: 483m (just outside the 457m boundary) outside approach");
 
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:482\n");
             check(!ScreenModule.isNavActive(), "S3: 482m outside approach");
 
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:306\n");
-            check(!ScreenModule.isNavActive(), "S3: 306m just outside city threshold");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:458\n");
+            check(!ScreenModule.isNavActive(), "S3: 458m just outside city threshold");
 
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:305\n");
-            check(ScreenModule.isNavActive(), "S3: 305m (1000 ft) enters city approach");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:457\n");
+            check(ScreenModule.isNavActive(), "S3: 457m (1500 ft) enters city approach");
 
-            // Hysteresis buffer is 50m -> stays active up to 355m
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:355\n");
-            check(ScreenModule.isNavActive(), "S3: 355m retained by 50m hysteresis");
+            // Hysteresis buffer is 50m -> stays active up to 507m
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:507\n");
+            check(ScreenModule.isNavActive(), "S3: 507m retained by 50m hysteresis");
 
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:356\n");
-            check(!ScreenModule.isNavActive(), "S3: 356m exits city approach");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:508\n");
+            check(!ScreenModule.isNavActive(), "S3: 508m exits city approach");
         }
 
         // ============================================================
@@ -484,7 +484,7 @@ public final class RouteContextDeltaIntegrationTest {
             check(collector.count() == 1, "S5: initial reroute rebind fires");
 
             // Send 30 rapid distance fluctuations
-            int[] jitters = new int[]{199, 200, 198, 250, 201, 180, 220, 150, 305, 304, 200, 190, 185, 180, 175, 170};
+            int[] jitters = new int[]{199, 200, 198, 250, 201, 180, 220, 150, 457, 456, 200, 190, 185, 180, 175, 170};
             for (int i = 0; i < jitters.length; i++) {
                 feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:" + jitters[i] + "\n");
                 check(collector.count() == 1, "S5: jitter distance " + jitters[i] + " must NOT re-arm rebind");
@@ -515,11 +515,11 @@ public final class RouteContextDeltaIntegrationTest {
             feed(rg, parseMethod, state, bridge, "route_generation:n:301\n");
             check(collector.count() == 0, "S6: gen 301 alone does not rebind yet");
 
-            // Distance 483m arrives -> outside approach -> pending rebind cancelled
+            // Distance 660m arrives -> outside approach -> pending rebind cancelled
             feed(rg, parseMethod, state, bridge,
-                "maneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:483\n");
+                "maneuver_count:n:1\nmaneuver_list:s:0\nm0_type:n:1\ndist_maneuver_m:n:660\n");
             check(!ScreenModule.isNavActive(), "S6: drops to 74");
-            check(collector.count() == 0, "S6: 483m cancels pending rebind");
+            check(collector.count() == 0, "S6: 660m cancels pending rebind");
 
             // Travel to 200m -> enters approach normally via setNavActive(true)
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
@@ -962,7 +962,7 @@ public final class RouteContextDeltaIntegrationTest {
             collector.clear();
             setSimulatedPresentationActive(false);
 
-            // Gen 550, city type 1 @ 400m (>305m city threshold) -> NOT in approach
+            // Gen 550, city type 1 @ 600m (>457m city threshold) -> NOT in approach
             feed(rg, parseMethod, state, bridge,
                 "source_supports_rg:n:1\n" +
                 "route_generation:n:550\n" +
@@ -970,12 +970,12 @@ public final class RouteContextDeltaIntegrationTest {
                 "maneuver_count:n:1\n" +
                 "maneuver_list:s:0\n" +
                 "m0_type:n:1\n" +
-                "dist_maneuver_m:n:400\n");
-            check(!ScreenModule.isNavActive(), "S18: city type 1 @ 400m is outside approach (threshold 305m)");
+                "dist_maneuver_m:n:600\n");
+            check(!ScreenModule.isNavActive(), "S18: city type 1 @ 600m is outside approach (threshold 457m)");
 
-            // Dynamic update: type becomes highway (8) at the same 400m distance and same generation
+            // Dynamic update: type becomes highway (8) at the same 600m distance and same generation
             feed(rg, parseMethod, state, bridge, "m0_type:n:8\n");
-            check(ScreenModule.isNavActive(), "S18: highway type 8 @ 400m enters approach (threshold 1609m)");
+            check(ScreenModule.isNavActive(), "S18: highway type 8 @ 600m enters approach (threshold 1609m)");
 
             // Distance increases to 1700m (>1609m highway threshold) -> exits approach
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:1700\n");
@@ -985,7 +985,7 @@ public final class RouteContextDeltaIntegrationTest {
             feed(rg, parseMethod, state, bridge, "m0_type:n:1\n");
             check(!ScreenModule.isNavActive(), "S18: city type 1 @ 1700m remains outside approach");
 
-            // Distance decreases to 250m (<=305m city threshold) -> enters approach
+            // Distance decreases to 250m (<=457m city threshold) -> enters approach
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:250\n");
             check(ScreenModule.isNavActive(), "S18: city type 1 @ 250m enters approach");
         }
@@ -1231,7 +1231,7 @@ public final class RouteContextDeltaIntegrationTest {
 
         // ============================================================
         // Suite 24: Multi-Cycle Approach Sequence & DSI/DisplayManager Verification
-        // Sequence: START -> 200m -> 483m -> 200m -> 483m -> 200m
+        // Sequence: START -> 200m -> 660m -> 200m -> 660m -> 200m
         // ============================================================
         {
             BapProxyHandler bapHandler = new BapProxyHandler();
@@ -1300,7 +1300,7 @@ public final class RouteContextDeltaIntegrationTest {
             RouteGuidance rg = new RouteGuidance();
             RouteGuidance.State state = (RouteGuidance.State) getField(RouteGuidance.class, rg, "state");
 
-            // 2. Approach Entry 1: 200m (<= 305m)
+            // 2. Approach Entry 1: 200m (<= 457m)
             feed(rg, parseMethod, state, bridge,
                 "source_supports_rg:n:1\n" +
                 "route_generation:n:900\n" +
@@ -1321,21 +1321,21 @@ public final class RouteContextDeltaIntegrationTest {
             }
             check(ScreenModule.getCurrentCtx() == 80, "S24 Cycle1 200m: currentCtx reached 80");
 
-            // 3. Approach Exit 1: 483m (> 305m)
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
-            check(ScreenModule.isRouteActive(), "S24 Cycle1 483m: routeActive STILL true");
-            check(!ScreenModule.isPresentationActive(), "S24 Cycle1 483m: presentationActive false");
-            check(!bridge.isBapPresentationActive(), "S24 Cycle1 483m: bapPresentationActive false");
-            check(!cs.rgiValid, "S24 Cycle1 483m: rgiValid false");
-            check(ScreenModule.getDesiredCtx() == 74, "S24 Cycle1 483m: desiredCtx 74");
+            // 3. Approach Exit 1: 660m (> 457m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:660\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle1 660m: routeActive STILL true");
+            check(!ScreenModule.isPresentationActive(), "S24 Cycle1 660m: presentationActive false");
+            check(!bridge.isBapPresentationActive(), "S24 Cycle1 660m: bapPresentationActive false");
+            check(!cs.rgiValid, "S24 Cycle1 660m: rgiValid false");
+            check(ScreenModule.getDesiredCtx() == 74, "S24 Cycle1 660m: desiredCtx 74");
 
             deadline = System.currentTimeMillis() + 1000;
             while (ScreenModule.getCurrentCtx() != 74 && System.currentTimeMillis() < deadline) {
                 Thread.sleep(20);
             }
-            check(ScreenModule.getCurrentCtx() == 74, "S24 Cycle1 483m: currentCtx reached 74");
+            check(ScreenModule.getCurrentCtx() == 74, "S24 Cycle1 660m: currentCtx reached 74");
 
-            // 4. Approach Re-Entry 1: 200m (<= 305m)
+            // 4. Approach Re-Entry 1: 200m (<= 457m)
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
             check(ScreenModule.isRouteActive(), "S24 Cycle2 200m: routeActive true");
             check(ScreenModule.isPresentationActive(), "S24 Cycle2 200m: presentationActive true");
@@ -1349,21 +1349,21 @@ public final class RouteContextDeltaIntegrationTest {
             }
             check(ScreenModule.getCurrentCtx() == 80, "S24 Cycle2 200m: currentCtx reached 80");
 
-            // 5. Approach Exit 2: 483m (> 305m)
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
-            check(ScreenModule.isRouteActive(), "S24 Cycle2 483m: routeActive STILL true");
-            check(!ScreenModule.isPresentationActive(), "S24 Cycle2 483m: presentationActive false");
-            check(!bridge.isBapPresentationActive(), "S24 Cycle2 483m: bapPresentationActive false");
-            check(!cs.rgiValid, "S24 Cycle2 483m: rgiValid false");
-            check(ScreenModule.getDesiredCtx() == 74, "S24 Cycle2 483m: desiredCtx 74");
+            // 5. Approach Exit 2: 660m (> 457m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:660\n");
+            check(ScreenModule.isRouteActive(), "S24 Cycle2 660m: routeActive STILL true");
+            check(!ScreenModule.isPresentationActive(), "S24 Cycle2 660m: presentationActive false");
+            check(!bridge.isBapPresentationActive(), "S24 Cycle2 660m: bapPresentationActive false");
+            check(!cs.rgiValid, "S24 Cycle2 660m: rgiValid false");
+            check(ScreenModule.getDesiredCtx() == 74, "S24 Cycle2 660m: desiredCtx 74");
 
             deadline = System.currentTimeMillis() + 1000;
             while (ScreenModule.getCurrentCtx() != 74 && System.currentTimeMillis() < deadline) {
                 Thread.sleep(20);
             }
-            check(ScreenModule.getCurrentCtx() == 74, "S24 Cycle2 483m: currentCtx reached 74");
+            check(ScreenModule.getCurrentCtx() == 74, "S24 Cycle2 660m: currentCtx reached 74");
 
-            // 6. Approach Re-Entry 2: 200m (<= 305m)
+            // 6. Approach Re-Entry 2: 200m (<= 457m)
             feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:200\n");
             check(ScreenModule.isRouteActive(), "S24 Cycle3 200m: routeActive true");
             check(ScreenModule.isPresentationActive(), "S24 Cycle3 200m: presentationActive true");
@@ -1377,7 +1377,7 @@ public final class RouteContextDeltaIntegrationTest {
             }
             check(ScreenModule.getCurrentCtx() == 80, "S24 Cycle3 200m: currentCtx reached 80");
 
-            // Verify explicit histories across START -> 200m -> 483m -> 200m -> 483m -> 200m:
+            // Verify explicit histories across START -> 200m -> 660m -> 200m -> 660m -> 200m:
             check(bapHandler.rgStatusHistory.size() == 5, "S24: exactly 5 RGStatus transactions");
             check(((Integer) bapHandler.rgStatusHistory.get(0)).intValue() == 1, "S24 RGStatus[0] == 1");
             check(((Integer) bapHandler.rgStatusHistory.get(1)).intValue() == 0, "S24 RGStatus[1] == 0");
@@ -1464,8 +1464,8 @@ public final class RouteContextDeltaIntegrationTest {
             bapHandler.throwOnRGStatus = true;
             bapHandler.throwOnRGStatusTarget = 0;
 
-            // Trigger approach exit (483m)
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
+            // Trigger approach exit (660m)
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:660\n");
 
             // Close failed, so Java MUST retain presentationActive=true and desiredCtx=80 to prevent split-brain!
             check(bridge.isBapPresentationActive(), "S26 failed close: bapPresentationActive retained true");
@@ -1476,7 +1476,7 @@ public final class RouteContextDeltaIntegrationTest {
             bapHandler.throwOnRGStatus = false;
             bapHandler.throwOnRGStatusTarget = -1;
 
-            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:483\n");
+            feed(rg, parseMethod, state, bridge, "dist_maneuver_m:n:660\n");
 
             // Retry succeeded: presentation closed cleanly, drops to 74
             check(!bridge.isBapPresentationActive(), "S26 retry: bapPresentationActive is false");

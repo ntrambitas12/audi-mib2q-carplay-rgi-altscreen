@@ -17,30 +17,22 @@ import java.util.Random;
  * VISIBILITY test for the field bug "cluster maneuver pill stays open (ctx 80) but is
  * completely BLACK after CarPlay reroutes on a very short turn".
  *
- * Why the earlier ShortTurnRerouteBlinkTest could not see it:
- *   1. it ticked the blink worker by reflection with the CURRENT generation, i.e. it
- *      simulated a worker that may not really be running;
- *   2. it only checked that the last non-progress command was the right MANEUVER, never
- *      what progress state the native renderer ends up on.
- *
- * Native contract (maneuver_render/arrow_progress.h): the wire clock owns blink; BLINK_LOW
- * and OFF render at exactly zero brightness; only FILL and BLINK_HIGH light the arrow.
- * The renderer never toggles blink itself. So if the last state it received is BLINK_LOW
- * (or OFF) and nobody sends anything afterwards, the arrow stays black.
+ * Renderer visibility oracle (verified against maneuver_render/render.c:370-381):
+ * the route arrow tint is mix(quiet, ice, filled*path_weight + glow) with quiet = warm white,
+ * so a drawn maneuver is VISIBLE in EVERY progress state (OFF, FILL, BLINK_LOW, BLINK_HIGH).
+ * OFF/BLINK_LOW merely draw the arrow warm white instead of blue. The renderer is BLANK only
+ * when no MANEUVER has been received since the last CLEAR (or since start), because CLEAR
+ * forces global alpha 0 and a FOLLOW_STREET stub (main.c clear_maneuver) until the next MANEUVER.
  *
  * This test:
- *   - models native visibility in the mock renderer (decoding the same fields the real
- *     RendererServer puts on the wire: MAN_FLAG_PROGRESS / PROGRESS_FLAG, state byte, mode
- *     byte, and main.c's cr_progress_decode rules: state!=OFF needs mode==1, OFF needs mode==0);
+ *   - models that in the mock renderer, decoding the same fields the real RendererServer puts
+ *     on the wire (MAN_FLAG_PROGRESS / PROGRESS_FLAG, state byte, mode byte, and main.c's
+ *     cr_progress_decode rules) for the failure history only;
  *   - NEVER ticks the blink worker itself: the REAL BAPActionBlink thread (600 ms) runs in
- *     real time; the test only reads its fields (thread alive, running flag, armed,
- *     generation) for the failure history;
+ *     real time; the test only reads its fields for the failure history;
  *   - INVARIANT after every settled step: route active, not rerouting, valid maneuver and
- *     presentation active  =>  within 2 blink periods (1300 ms real time) the renderer must
- *     have been VISIBLE at least once, either because the current decoded state is
- *     FILL/BLINK_HIGH or because one of those arrives inside the window. Stuck on
- *     BLINK_LOW/OFF past the window is a violation. The last non-progress command must also
- *     still be the right MANEUVER (the old invariant).
+ *     presentation active  =>  the last renderer paint command is a MANEUVER (not a CLEAR, not
+ *     nothing) carrying the right icon/exit angle.
  *
  * Scenarios emphasize the sticky-blink mechanism: identical distM repeated in the blink
  * zone (stopped car), reroutes (route_state 5 then 1) at 5..29 m returning identical or new
@@ -57,7 +49,6 @@ public final class ShortTurnBlinkVisibilityTest {
     private static final int[] TYPES = {1, 2};
     private static final int[] ANGLES = {-90, 90};
     private static final int[] ZONE_DIST = {5, 12, 20, 29};
-    private static final int WINDOW_MS = 1300;          // 2 blink periods (600 ms each) + slack
     private static final long SEED = 20260928L;
     private static final int HISTORY_DUMP = 40;
 
@@ -92,9 +83,9 @@ public final class ShortTurnBlinkVisibilityTest {
 
         static int decodeLegacy(int mode) { return mode == 1 ? S_FILL : S_OFF; }
 
-        static boolean visible(int st) { return st == S_FILL || st == S_HIGH; }
-
-        synchronized boolean visibleNow() { return visible(state); }
+        /** Drawn maneuver == visible in every progress state (warm white when OFF/BLINK_LOW).
+         *  Blank only when no MANEUVER arrived since the last CLEAR (or since start). */
+        synchronized boolean visibleNow() { return "MANEUVER".equals(lastPaint); }
         synchronized int stateNow() { return state; }
         synchronized String paintNow() { return lastPaint; }
         synchronized int iconNow() { return lastIcon; }
@@ -345,7 +336,7 @@ public final class ShortTurnBlinkVisibilityTest {
 
         static boolean inZone(int d) { return d > 0 && d <= 30; }
 
-        /** The invariant. Waits (bounded) for the REAL worker to make the arrow visible. */
+        /** The invariant: a MANEUVER has been drawn since the last CLEAR, with the right geometry. */
         void settle(String where) throws Exception {
             if (rerouting(m)) return;
             if (!ScreenModule.isPresentationActive()) {
@@ -354,29 +345,15 @@ public final class ShortTurnBlinkVisibilityTest {
             }
             String why = null;
             String paint = renderer.paintNow();
-            if (paint == null) {
-                why = "no renderer paint command at all";
-            } else if (!"MANEUVER".equals(paint)) {
-                why = "last non-progress renderer command is " + paint + " (pill open but BLACK)";
+            if (!renderer.visibleNow()) {
+                why = "renderer blank (no MANEUVER since CLEAR)"
+                    + (paint == null ? " [nothing sent at all]" : "")
+                    + " distM=" + m.dist + " worker " + (workerAliveAndRunning() ? "alive" : "NOT RUNNING");
             } else if (renderer.iconNow() != EXPECT_ICON[m.variant]
                     || renderer.exitNow() != EXPECT_EXIT[m.variant]) {
                 why = "renderer shows icon=" + renderer.iconNow() + "/exit=" + renderer.exitNow()
                     + " but current maneuver is icon=" + EXPECT_ICON[m.variant]
                     + "/exit=" + EXPECT_EXIT[m.variant];
-            }
-            if (why == null) {
-                long deadline = now() + WINDOW_MS;
-                while (!renderer.visibleNow()) {
-                    if (now() > deadline) break;
-                    Thread.sleep(10);
-                }
-                if (!renderer.visibleNow()) {
-                    int st = renderer.stateNow();
-                    why = "renderer stuck on " + (st < 0 ? "none" : S_NAME[st]) + " (arrow at ZERO brightness) for "
-                        + WINDOW_MS + " ms with distM=" + m.dist + " worker "
-                        + (workerAliveAndRunning() ? "alive" : "NOT RUNNING")
-                        + (m.dist <= 0 ? " [distance omitted/zero: progress OFF, worker idle]" : "");
-                }
             }
             if (why != null) {
                 log("VIOLATION at " + where);

@@ -211,7 +211,7 @@ public final class CurrentPositionDeliveryTest {
              * signpost, so distStr stays "" (BAPBridge only adds the arrow/" | <dist>" suffix when
              * distManeuverM > 0) and this fixture keeps hitting plain scrolling exactly like before the
              * fix -- -1 specifically because distM=0 satisfies hasUsableDistance=(distM>=0) and would
-             * force BAPBridge.update()'s approach-zone entry (0 <= the 305 m display threshold), which
+             * force BAPBridge.update()'s approach-zone entry (0 <= the 457 m display threshold), which
              * the original 5000 m baseline never did; -1 takes the "distance unusable" branch instead,
              * which falls back to the (still-false) previous approach-zone state, so this fixture enters
              * approach zone exactly as often as the original one did: never.
@@ -322,7 +322,7 @@ public final class CurrentPositionDeliveryTest {
         check(get(f.scroll(), "starts") == planBefore, "same-bucket distance delta rebuilt the scroll plan");
         check(f.deadline() == deadlineBefore, "same-bucket distance delta moved the deadline");
 
-        // A different-bucket distance (1500 m, still > 305 m so approach zone is unaffected;
+        // A different-bucket distance (1500 m, still > 457 m so approach zone is unaffected;
         // "1.5 km" metric / "0.9 mi" imperial) MUST republish with new text -- guards against
         // the assertions above passing only because nothing is ever republished.
         f.feed("dist_maneuver_m:n:1500\n");

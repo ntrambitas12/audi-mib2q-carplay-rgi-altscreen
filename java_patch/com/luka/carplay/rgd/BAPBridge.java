@@ -47,7 +47,7 @@ public class BAPBridge {
     private static final int EXITVIEW_NAR = 1;
 
     private static final int ROUTE_STATE_REROUTING = 5;
-    private static final int CITY_DISPLAY_DISTANCE_M = 305;       // ~1000 ft (city/suburban approach)
+    private static final int CITY_DISPLAY_DISTANCE_M = 457;       // ~1500 ft (city/suburban approach; ~30 s at 30-35 mph)
     private static final int HIGHWAY_DISPLAY_DISTANCE_M = 1600;   // ~1.0 mile (highway/freeway approach)
     private static final int HYSTERESIS_BUFFER_M = 50;            // ~160 ft buffer to prevent boundary flapping
     private static final int CITY_PREPARE_THRESHOLD_M = 1500;
@@ -1350,7 +1350,7 @@ public class BAPBridge {
              * Approach zone detection.
              *
              * Evaluates whether the vehicle is within the maneuver display threshold:
-             * CITY_DISPLAY_DISTANCE_M (~1000 ft) for street turns,
+             * CITY_DISPLAY_DISTANCE_M (~1500 ft) for street turns,
              * HIGHWAY_DISPLAY_DISTANCE_M (~1.0 mi) for highway ramps/interchanges,
              * with HYSTERESIS_BUFFER_M (~160 ft) to prevent boundary flapping.
              */
@@ -1428,10 +1428,10 @@ public class BAPBridge {
                 }
             }
 
-            /* Suspend maneuver presentation when cruising (> 1000 ft) to close the KDK cutout
+            /* Suspend maneuver presentation when cruising (> 1500 ft) to close the KDK cutout
              * in the speedometer dial, while keeping the status bar route text and overall BAP route
              * active. Full BAP/RouteInfo teardown is reserved for onRouteEnd / onShutdown.
-             * Dynamically reactivate when entering the approach zone (<= 1000 ft). */
+             * Dynamically reactivate when entering the approach zone (<= 1500 ft). */
             if (!nowApproach) {
                 if (bapPresentationActive || com.luka.carplay.core.ScreenModule.isPresentationActive()) {
                     Log.i(TAG, "Approach zone EXIT: closing BAP presentation");
@@ -3069,7 +3069,7 @@ public class BAPBridge {
         int policyCap = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
         if (policyCap <= 0) return -1;
         /*
-         * The arrow graphic is composed in the approach zone (<= policyCap: ~1000 ft city, ~1.0 mi highway).
+         * The arrow graphic is composed in the approach zone (<= policyCap: ~1500 ft city, ~1.0 mi highway).
          * To ensure the arrow smoothly fills throughout the approach zone where it is visible (and does not
          * stay at 0 fill or immediately jump into flashing because of a short prior step length), the denominator
          * must span the entire approach window.

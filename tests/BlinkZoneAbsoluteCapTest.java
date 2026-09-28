@@ -52,8 +52,9 @@ public final class BlinkZoneAbsoluteCapTest {
 
         // --- Direct helper checks (the single consolidated source of truth) ---
 
-        // blink off at 61 m on the city denominator (305 m): 61*100/305 == 20.0%, not < 20%.
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(61), Integer.valueOf(305))).booleanValue(),
+        // blink off at 61 m on the city denominator (457 m): 61*100/457 == 13% (< 20%, so the percent
+        // rule alone would still blink) but 61 m is beyond the 30.48 m absolute cap.
+        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(61), Integer.valueOf(457))).booleanValue(),
             "blink off at 61 m city denominator");
 
         // blink off at 300 m on the highway denominator (1600 m): 300*100/1600 == 18.75% (< 20%,
@@ -65,7 +66,7 @@ public final class BlinkZoneAbsoluteCapTest {
         // blink on at 29 m (well under both the percent rule and the 30.48 m absolute cap).
         check(((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(29), Integer.valueOf(1600))).booleanValue(),
             "blink on at 29 m");
-        check(((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(29), Integer.valueOf(305))).booleanValue(),
+        check(((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(29), Integer.valueOf(457))).booleanValue(),
             "blink on at 29 m (city denominator too)");
 
         // off at exactly 30.48 m+ : 30 m (3000 cm < 3048 cm) stays on; 31 m (3100 cm >= 3048 cm)

@@ -545,7 +545,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 /* BAP session start: rgdActive=true enables status text, position scroll, and
                  * steering-wheel roller click throughout the session.  Context 80 (dial cutout +
                  * maneuver backing) is NOT opened here — BAPBridge.update() approach-zone ENTER
-                 * opens it only when the vehicle is within 1000 ft AND the renderer is frame-ready.
+                 * opens it only when the vehicle is within 1500 ft AND the renderer is frame-ready.
                  * presentationConfirmed tracks renderer/BAP readiness for the text hold. */
                 presentationConfirmed = false;
                 rgActive = bap != null && bap.onStart();
@@ -557,7 +557,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 /* RC#4: do NOT call setPresentationActive(true) here. In the dynamic-context model,
                  * presentationActive = "open context 80 + dial cutout immediately". That must
                  * only happen inside BAPBridge.update() approach-zone ENTER, when the vehicle
-                 * is within 1000 ft AND the renderer has a confirmed frame ready.  Calling it
+                 * is within 1500 ft AND the renderer has a confirmed frame ready.  Calling it
                  * unconditionally from onStart() success was the root cause of the blank backing
                  * box: context 80 opened at session start (any distance) before the renderer
                  * had painted a real maneuver icon.  bap.onStart() already sets
@@ -811,7 +811,7 @@ public class RouteGuidance implements CarplayBus.Listener {
             if (!rgActive) return true;
             /* RC#4: do NOT call setNavActive(true) here. The presentation worker has no
              * knowledge of approach zone state.  After the dynamic context-switching refactor,
-             * opening context 80 from a bap.onStart() retry (when the vehicle is > 1000 ft from
+             * opening context 80 from a bap.onStart() retry (when the vehicle is > 1500 ft from
              * the next turn) results in an empty dial cutout: the renderer is in sendClear state
              * because approach-zone EXIT already fired, and no subsequent distance update will
              * re-trigger approach-zone ENTER since the update() path is driven by iOS RGI packets.

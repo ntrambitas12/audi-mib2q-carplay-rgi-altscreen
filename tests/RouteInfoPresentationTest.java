@@ -190,7 +190,7 @@ public final class RouteInfoPresentationTest {
         bridge.update(baseline);
         rpf.setBoolean(null, false); // clear baseline latch
 
-        // Case 2: Reroute occurs -> new generation 301, city turn at 483 m (~0.3 mi > 305 m)
+        // Case 2: Reroute occurs -> new generation 301, city turn at 660 m (~0.4 mi > 457 m)
         // With ctx 80 currently active, must NOT trigger context rebind!
         RouteGuidance.State rerouteFar = route();
         rerouteFar.routeGeneration = 301L;
@@ -199,15 +199,15 @@ public final class RouteInfoPresentationTest {
         rerouteFar.maneuverCount = 1;
         rerouteFar.maneuverOrder = new int[]{0};
         rerouteFar.mType[0] = 1;
-        rerouteFar.distManeuverM = 483;
+        rerouteFar.distManeuverM = 660;
         rerouteFar.markAllDirtyForReplay();
         boolean res = bridge.update(rerouteFar);
-        check("new generation + 483m city turn (>305m) must NOT rebind context 80",
+        check("new generation + 660m city turn (>457m) must NOT rebind context 80",
             !rpf.getBoolean(null));
-        check("new generation + 483m city turn must exit approach zone (navActive=false)",
+        check("new generation + 660m city turn must exit approach zone (navActive=false)",
             !ScreenModule.isNavActive());
 
-        // Case 3: Reroute occurs -> new generation 302, city turn at 200 m (<= 305 m)
+        // Case 3: Reroute occurs -> new generation 302, city turn at 200 m (<= 457 m)
         // With ctx 80 currently active, MUST trigger forced 72->80 context rebind!
         ScreenModule.setPresentationActive(true);
         rpf.setBoolean(null, false);
@@ -221,7 +221,7 @@ public final class RouteInfoPresentationTest {
         rerouteNear.distManeuverM = 200;
         rerouteNear.markAllDirtyForReplay();
         bridge.update(rerouteNear);
-        check("new generation + 200m city turn (<=305m) with active ctx 80 MUST trigger rebind",
+        check("new generation + 200m city turn (<=457m) with active ctx 80 MUST trigger rebind",
             rpf.getBoolean(null));
         Field rrf = ScreenModule.class.getDeclaredField("rebindReason");
         rrf.setAccessible(true);

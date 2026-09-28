@@ -258,7 +258,7 @@ public final class RerouteRendererRecoveryTest {
             ScreenModule.setPresentationActive(false);
 
             // 1. Establish: active route, left turn (MT type 1) at 200m, inside
-            //    city approach zone (< 305m). Full initial snapshot.
+            //    city approach zone (< 457m). Full initial snapshot.
             RouteGuidance.State s1 = maneuverState(900L, 1, 900L, 1, -90, 200, 1);
             s1.markAllDirtyForReplay();
             bridge.update(s1);
@@ -386,7 +386,7 @@ public final class RerouteRendererRecoveryTest {
             BAPBridge bridge = createBridge(renderer);
             ScreenModule.setPresentationActive(false);
 
-            // Cruising far outside the approach zone (city threshold 305m).
+            // Cruising far outside the approach zone (city threshold 457m).
             RouteGuidance.State sFar = maneuverState(930L, 1, 930L, 1, -90, 5000, 1);
             sFar.markAllDirtyForReplay();
             bridge.update(sFar);
