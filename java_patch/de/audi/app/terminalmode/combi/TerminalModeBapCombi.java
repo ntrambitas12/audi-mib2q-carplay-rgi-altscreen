@@ -64,6 +64,22 @@ public class TerminalModeBapCombi implements ITerminalModeComponent {
         } catch (Throwable t) { /* never crash the stock component init */ }
         try { com.luka.carplay.coverart.CoverArt.getInstance().start(this.eventListener); }
         catch (Throwable t) { /* optional */ }
+
+        /* ===== Android Auto nav tap: passive, forwards nowhere. This reflective call
+         * is the RUNTIME half of its isolation: on a firmware image missing
+         * org.dsi.ifc.androidauto2, Class.forName/getMethod/invoke throws (caught
+         * below) and this line never touches CarPlay. The BUILD-TIME half lives in
+         * scripts/build_java.sh, which excludes java_patch/com/luka/carplay/aa from
+         * the compile entirely when the stock jar lacks that package, so a firmware
+         * without AndroidAuto2 support can never fail the whole CarPlay javac call
+         * either. See com.luka.carplay.aa.AndroidAutoNavTap for both halves in full,
+         * and its own registration-retry loop for how it copes with the DSI service
+         * not being up yet when this call happens. ===== */
+        try {
+            Class.forName("com.luka.carplay.aa.AndroidAutoNavTap")
+                .getMethod("start", new Class[]{Object.class})
+                .invoke(null, new Object[]{this.context});
+        } catch (Throwable t) { /* optional; never affect CarPlay init */ }
     }
 
     public void deinit() {

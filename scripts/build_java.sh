@@ -55,6 +55,22 @@ if [ "$USE_DOCKER" -eq 1 ]; then
     rm -rf /src/build/java; mkdir -p "$OUT" /src/build
     SRCLIST=$(mktemp)
     find "$SRC" -name "*.java" -type f > "$SRCLIST"
+    # The AA nav tap (com/luka/carplay/aa) implements org.dsi.ifc.androidauto2.
+    # DSIAndroidAuto2Listener; a stock jar built without AndroidAuto2 support would
+    # otherwise fail this single javac call for the whole patch. TerminalModeBapCombi
+    # only ever loads the tap reflectively (ClassNotFoundException caught), so
+    # excluding its sources here is the build-time half of that same guarantee.
+    LISTING=$(mktemp)
+    if ! jar tf "/tools/out/MU1316-final.jar" > "$LISTING"; then
+      echo "ERROR: could not list /tools/out/MU1316-final.jar" >&2
+      rm -f "$LISTING"
+      exit 1
+    fi
+    if ! grep -q "^org/dsi/ifc/androidauto2/DSIAndroidAuto2Listener.class$" "$LISTING"; then
+      echo "AA nav tap skipped: stock JAR lacks androidauto2"
+      grep -v "^$SRC/com/luka/carplay/aa/" "$SRCLIST" > "$SRCLIST.tmp"; mv "$SRCLIST.tmp" "$SRCLIST"
+    fi
+    rm -f "$LISTING"
     echo "Compiling $(wc -l < "$SRCLIST" | tr -d " ") files (target 1.4)..."
 
     # Generate a CarPlayApp copy with the real BUILD_ID; never edit the source tree.
@@ -88,6 +104,19 @@ else
   mkdir -p "$OUT" "$PROJECT_DIR/build"
   SRCLIST=$(mktemp)
   find "$SRC" -name "*.java" -type f > "$SRCLIST"
+  # See the matching check in the Docker branch above: excluding com/luka/carplay/aa
+  # here is the build-time half of the AA nav tap's isolation guarantee.
+  LISTING=$(mktemp)
+  if ! "$JDK_DIR/bin/jar" tf "$STOCK_JAR" > "$LISTING"; then
+    echo "ERROR: could not list $STOCK_JAR" >&2
+    rm -f "$LISTING"
+    exit 1
+  fi
+  if ! grep -q "^org/dsi/ifc/androidauto2/DSIAndroidAuto2Listener.class$" "$LISTING"; then
+    echo "AA nav tap skipped: stock JAR lacks androidauto2"
+    grep -v "^$SRC/com/luka/carplay/aa/" "$SRCLIST" > "$SRCLIST.tmp"; mv "$SRCLIST.tmp" "$SRCLIST"
+  fi
+  rm -f "$LISTING"
   echo "Compiling $(wc -l < "$SRCLIST" | tr -d " ") files (target 1.4)..."
 
   GEN=$(mktemp -d)

@@ -48,7 +48,8 @@ CLASSPATH="$PATCH_JAR:$STOCK_JAR:$TOOLS_DIR/libs/org.osgi.framework-1.10.0.jar:$
     "$PROJECT_DIR/tests/RendererMapperDirectionTest.java" \
     "$PROJECT_DIR/tests/BlinkZoneAbsoluteCapTest.java" \
     "$PROJECT_DIR/tests/CarPlayDistanceResolverTest.java" \
-    "$PROJECT_DIR/tests/RouteTextTruncationAndExitArrowTest.java"
+    "$PROJECT_DIR/tests/RouteTextTruncationAndExitArrowTest.java" \
+    "$PROJECT_DIR/tests/AndroidAutoNavTapTest.java"
 # No checkout resources or font files are visible through the working directory.
 # The pure runtime uses only classes and the embedded data in the built JAR.
 (cd "$TEST_DIR" && "$JDK_DIR/bin/java" -cp "$TEST_DIR:$PATCH_JAR" \
@@ -62,6 +63,7 @@ CLASSPATH="$PATCH_JAR:$STOCK_JAR:$TOOLS_DIR/libs/org.osgi.framework-1.10.0.jar:$
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RouteContextDeltaIntegrationTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" ScreenModuleContextRaceTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RouteContextRendererLifecycleTest
+PROJECT_DIR="$PROJECT_DIR" "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" com.luka.carplay.aa.AndroidAutoNavTapTest
 # This probe loads additional IBM J9 classes reconstructed from the stock JXE.
 # Their invokespecial bytecode is rejected by the HotSpot verifier; disable it
 # only for this isolated host probe. The production patch build is unchanged.
