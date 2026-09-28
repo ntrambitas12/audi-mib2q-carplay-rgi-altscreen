@@ -317,8 +317,6 @@ public final class ClusterLayerController {
             }
             if (!navActive) {
                 dm.setOpacity(MANEUVER, terminal, 0);
-                dm.setOpacity(BACKING_SPORT, terminal, 0);
-                dm.setOpacity(BACKING_POPUP, terminal, 0);
                 return;
             }
             // One composition path for both stock stages; visibility is independent.
