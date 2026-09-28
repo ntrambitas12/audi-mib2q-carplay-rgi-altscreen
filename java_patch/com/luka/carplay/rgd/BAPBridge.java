@@ -12,6 +12,7 @@
  */
 package com.luka.carplay.rgd;
 
+import com.luka.carplay.BuildFlags;
 import com.luka.carplay.core.CarPlayApp;
 import com.luka.carplay.framework.Log;
 import de.audi.atip.base.IFrameworkAccess;
@@ -1316,13 +1317,10 @@ public class BAPBridge {
             int type0 = (firstIdx >= 0 && s.mType != null && firstIdx < s.mType.length) ? s.mType[firstIdx] : -1;
             boolean showManeuver = ManeuverMapper.isValidType(type0) && !isRerouting;
 
-            if (isRerouting != diagRerouting) {
-                diagRerouting = isRerouting;
-                Log.i(TAG, "RGI-DIAG reroute " + (isRerouting ? "ENTER" : "EXIT")
-                    + " gen=" + s.routeGeneration + " routeState=" + s.routeState
-                    + " stateGen=" + s.routeStateGeneration
-                    + " inZone=" + inApproachZone
-                    + " presentation=" + com.luka.carplay.core.ScreenModule.isPresentationActive());
+            if (BuildFlags.DIAG) {
+                RgiDiag.rerouteEdge(isRerouting, s.routeGeneration, s.routeState,
+                    s.routeStateGeneration, inApproachZone,
+                    com.luka.carplay.core.ScreenModule.isPresentationActive());
             }
             if (isRerouting) {
                 lastFirstManeuverIdx = -1;
@@ -1442,10 +1440,10 @@ public class BAPBridge {
                             rendererClient.sendClear();
                             lastCrIdx = -1;
                             lastCrIcon = -1;
-                            diagClearedAwaitingManeuver = true;
-                            Log.i(TAG, "RGI-DIAG renderer CLEAR site=exit-close-ok gen=" + s.routeGeneration
-                                + " rerouting=" + isRerouting + " explicit=" + explicitClear
-                                + " shouldClear=" + shouldClearManeuver);
+                            if (BuildFlags.DIAG) {
+                                RgiDiag.clearAfterExitClose(s.routeGeneration, isRerouting,
+                                    explicitClear, shouldClearManeuver);
+                            }
                         }
                         synchronized (this) { rendererManeuverPending = false; }
                     } else {
@@ -1693,24 +1691,22 @@ public class BAPBridge {
                     }
                     /* Diagnostic: presentation open + valid maneuver but the renderer is still
                      * blank after a CLEAR. Logged once per clear (black-pill signature). */
-                    if (diagClearedAwaitingManeuver && !diagBlankWarned
-                            && com.luka.carplay.core.ScreenModule.isPresentationActive()) {
-                        diagBlankWarned = true;
-                        Log.w(TAG, "RGI-DIAG pill open but renderer BLANK after CLEAR: gen=" + s.routeGeneration
-                            + " dirty=0x" + Integer.toHexString(dirty) + " approachChanged=" + approachChanged
-                            + " inZone=" + inApproachZone + " lastCrIdx=" + lastCrIdx);
+                    if (BuildFlags.DIAG) {
+                        RgiDiag.blankAfterClearCheck(s.routeGeneration, dirty, approachChanged,
+                            inApproachZone, lastCrIdx,
+                            com.luka.carplay.core.ScreenModule.isPresentationActive());
                     }
                 } else if (!nowApproach || explicitClear || shouldClearManeuver) {
                     if (lastCrIdx != -1 || lastCrIcon != -1) {
                         rendererClient.sendClear();
                         lastCrIdx = -1;
                         lastCrIcon = -1;
-                        diagClearedAwaitingManeuver = true;
-                        Log.i(TAG, "RGI-DIAG renderer CLEAR site=tail gen=" + s.routeGeneration
-                            + " approach=" + nowApproach + " rerouting=" + isRerouting
-                            + " explicit=" + explicitClear + " shouldClear=" + shouldClearManeuver
-                            + " presentation=" + com.luka.carplay.core.ScreenModule.isPresentationActive()
-                            + " bapPresentation=" + bapPresentationActive);
+                        if (BuildFlags.DIAG) {
+                            RgiDiag.clearAtTail(s.routeGeneration, nowApproach, isRerouting,
+                                explicitClear, shouldClearManeuver,
+                                com.luka.carplay.core.ScreenModule.isPresentationActive(),
+                                bapPresentationActive);
+                        }
                     }
                     /* RC#1: clear the pending flag so the next approach-ENTER cycle is
                      * not permanently blocked on a flag that was set during this reroute/clear. */
@@ -2556,10 +2552,6 @@ public class BAPBridge {
     private long lastCrRouteGeneration = -1L;
     private boolean rendererManeuverPending; // guarded by this, also read by blink worker
     private int lastCrIdx = -1;
-    /* Diagnostics only (update()/worker thread): transition-edge state for RGI-DIAG logs. */
-    private boolean diagRerouting;
-    private boolean diagClearedAwaitingManeuver;
-    private boolean diagBlankWarned;
     private int[] lastCrJunctionAngles;
     private boolean lastCrSnapToRoad;
 
@@ -2782,12 +2774,9 @@ public class BAPBridge {
                 lastCrJunctionAngles = junctionAngles;
                 lastCrSnapToRoad = mapped.snapToRoad;
                 rendererManeuverPending = false;
-                if (diagClearedAwaitingManeuver) {
-                    diagClearedAwaitingManeuver = false;
-                    diagBlankWarned = false;
-                    Log.i(TAG, "RGI-DIAG MANEUVER sent after CLEAR gen=" + s.routeGeneration
-                        + " idx=" + firstIdx + " ver=" + ver + " icon=" + icon
-                        + " presentation=" + com.luka.carplay.core.ScreenModule.isPresentationActive());
+                if (BuildFlags.DIAG) {
+                    RgiDiag.maneuverSent(s.routeGeneration, firstIdx, ver, icon,
+                        com.luka.carplay.core.ScreenModule.isPresentationActive());
                 }
             }
             noteRendererSendResult(ok);

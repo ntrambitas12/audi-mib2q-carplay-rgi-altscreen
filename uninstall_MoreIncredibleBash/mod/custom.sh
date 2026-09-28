@@ -27,6 +27,9 @@ OWNED="/mnt/app/root/hooks/libcarplay_hook.so
 /mnt/app/root/hooks/carplay_monitor.sh
 /mnt/app/root/hooks/carplay_processes.sh
 /mnt/app/root/hooks/carplay_cleanup.sh
+/mnt/app/root/hooks/carplay_logcopy.sh
+/mnt/app/root/hooks/carplay_build_mode
+/mnt/app/carplay_verbose
 /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 
 echo "custom.sh: CarPlay uninstall"
@@ -44,7 +47,15 @@ while IFS= read -r bak; do
 done < "$LIST"
 rm -f "$LIST"
 
-# 2. remove the files we own (no stock backup for these).
+# 2a. stop the debug flight recorder if it is running (it also exits once the marker is gone).
+LC_PID=${CP_TMP:-/tmp}/carplay_logcopy.pid
+if [ -f "$LC_PID" ]; then
+    pid=$(cat "$LC_PID" 2>/dev/null)
+    case $pid in ''|*[!0-9]*) ;; *) kill -15 "$pid" 2>/dev/null ;; esac
+    rm -f "$LC_PID"
+fi
+
+# 2. remove the files we own (no stock backup for these) - includes every debug piece.
 for f in $OWNED; do
     [ -e "$f" ] && rm -f "$f" && echo "  removed $f"
 done

@@ -6,6 +6,7 @@ sources:
   - code: deploy/smartphone_integrator/carplay_startup.sh
   - code: deploy/smartphone_integrator/carplay_monitor.sh
   - code: deploy/smartphone_integrator/carplay_processes.sh
+  - code: deploy/smartphone_integrator/carplay_logcopy.sh
   - code: deploy/smartphone_integrator/carplay_cleanup.sh
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: deploy/smartphone_integrator/README.md
@@ -79,6 +80,16 @@ overwritten (the custom cleanup calls it for Audi's mdnsd/PPS teardown).
 - When dio exits the monitor exits too and **leaves `maneuver_render` alive**, so a replacement
   inherits the existing EGL allocations instead of re-entering fragile Qualcomm `eglInitialize`.
   The monitor never signals `dio_manager`.
+
+## 🐞 Debug builds: the log copier is outside the supervision
+
+A **debug** build's wrapper has one extra block (`DEBUG-LOGCOPY-BEGIN/END`, stripped from release
+payloads) that starts `carplay_logcopy.sh` when it is installed: its own background process, `nice`d,
+`LD_PRELOAD` cleared, output discarded. It has no owner file, is never signalled by the monitor, does not
+touch the renderer PID registry, and a second generation's copy simply finds the live pid file
+(`/tmp/carplay_logcopy.pid`) and exits. If it dies, the next generation starts a new one; if the debug
+marker `/mnt/app/carplay_verbose` is removed it stops on its own. See
+[install](install.md#-debug-vs-release-builds).
 
 ## 🔍 Adoption is by live PID
 

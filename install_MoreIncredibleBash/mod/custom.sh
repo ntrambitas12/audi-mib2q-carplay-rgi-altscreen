@@ -9,6 +9,13 @@
 #       * flat: the release assets dropped straight into carplay/ - each known
 #         name goes to its fixed on-unit path (see flat_dest);
 #       * tree: carplay/root/<on-unit path> copied onto "/".
+#   - debug vs release (carplay/BUILD_MODE, first line "debug" or "release"):
+#       * debug   -> also installs carplay_logcopy.sh (the SD-card flight recorder) and creates
+#                    /mnt/app/carplay_verbose (persistent verbose logging);
+#       * release -> installs neither and REMOVES any earlier debug install: the copier script,
+#                    the verbose marker (even one created by hand) and the copier's /tmp pid file
+#                    (a running copier is stopped), and rewrites/removes carplay_build_mode.  A
+#                    payload without BUILD_MODE (root/ tree) counts as release.
 #   - in-place runtime patches (per-unit / stock-dependent), done here:
 #       * smartphone_integrator.json  - replace the "carplay" child by path
 #       * dio_manager.json            - register the iAP2 route-guidance message IDs
@@ -41,9 +48,14 @@ flat_dest() {
         libcarplay_hook.so|maneuver_render|flag_atlas.rgba) echo "$HOOKS/$1" ;;
         carplay_startup.sh|carplay_monitor.sh|carplay_processes.sh|carplay_cleanup.sh) echo "$HOOKS/$1" ;;
         carplay_hook.jar) echo "$JARS/$1" ;;
+        carplay_logcopy.sh) echo "$HOOKS/$1" ;;                # debug builds only
+        BUILD_MODE) echo "$HOOKS/carplay_build_mode" ;;        # what this unit was built as
         *) return 1 ;;
     esac
 }
+
+VERBOSE=/mnt/app/carplay_verbose                  # persistent verbose marker (debug builds)
+LC_PID=${CP_TMP:-/tmp}/carplay_logcopy.pid        # the flight recorder's single-instance pid file
 
 CFG=/mnt/system/etc/eso/production/smartphone_integrator.json
 DIO=/mnt/system/etc/eso/production/dio_manager.json
@@ -64,7 +76,7 @@ backup_once() { [ -e "$2" ] || cp -p "$1" "$2" || { echo "FAILED backup $2"; ret
 # The release assets, dropped flat into carplay/.  All or nothing: a partly copied
 # release would pair a new carplay_startup.sh with an old monitor, so it stops here.
 FLAT_ASSETS="libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh
-carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
+carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar BUILD_MODE"
 
 # Payload as "source|destination" lines into $1.  Flat assets are checked by name,
 # never by walking the card.  The optional root/ tree needs find: QNX fs-dos cannot
@@ -74,7 +86,13 @@ carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
 list_payload() {
     : > "$1" || { echo "FAILED create $1"; return 1; }
     missing=
-    for a in $FLAT_ASSETS; do
+    # A debug release additionally must carry the flight recorder (all or nothing, like the rest).
+    mode=
+    [ -f "$RES/BUILD_MODE" ] && { read -r mode < "$RES/BUILD_MODE" || :; }   # no trailing newline: read fails but sets mode
+    mode=$(printf '%s' "$mode" | tr -d '\r')
+    [ -n "$mode" ] || mode=release
+    case $mode in debug) need="$FLAT_ASSETS carplay_logcopy.sh" ;; *) need=$FLAT_ASSETS ;; esac
+    for a in $need; do
         if [ -f "$RES/$a" ]; then printf '%s|%s\n' "$RES/$a" "$(flat_dest "$a")" >> "$1"
         else missing="$missing $a"; fi
     done
@@ -93,6 +111,22 @@ list_payload() {
         rm -f "$1.tree" "$1.err"
     fi
     [ -s "$1" ] || { echo "no payload in $RES (release files or root/ tree)"; rm -f "$1"; return 1; }
+}
+
+# ---- debug pieces: a release install / uninstall removes every one of them -------------------
+stop_logcopy() {   # a running copier also exits on its own once the marker is gone
+    [ -f "$LC_PID" ] || return 0
+    pid=$(cat "$LC_PID" 2>/dev/null)
+    case $pid in ''|*[!0-9]*) ;; *) kill -15 "$pid" 2>/dev/null ;; esac
+}
+remove_debug() {
+    stop_logcopy
+    for f in "$HOOKS/carplay_logcopy.sh" "$VERBOSE" "$LC_PID" "$HOOKS/carplay_build_mode"; do
+        # a flat release payload has just written a fresh carplay_build_mode: keep that one
+        [ "$f" = "$HOOKS/carplay_build_mode" ] && [ "${KEEP_MODE:-0}" = 1 ] && continue
+        [ -e "$f" ] || continue
+        if rm -f "$f"; then echo "  removed debug piece $f"; else echo "  WARN could not remove $f"; fi
+    done
 }
 
 # ---- smartphone_integrator.json: replace the "carplay" child by path ----------
@@ -190,6 +224,20 @@ install)
         echo "  $dest"
     done < "$LIST"
     rm -f "$LIST"
+    MODE=
+    [ -f "$RES/BUILD_MODE" ] && { read -r MODE < "$RES/BUILD_MODE" || :; }   # no trailing newline: read fails but sets MODE
+    MODE=$(printf '%s' "$MODE" | tr -d '\r')
+    [ -n "$MODE" ] || MODE=release
+    case $MODE in
+    debug)
+        # persistent verbose logging (Log.java and the hook honor this marker after a reboot too)
+        if echo debug > "$VERBOSE"; then echo "  $VERBOSE (debug build: verbose logging + SD flight recorder)"
+        else echo "  WARN could not create $VERBOSE"; fi ;;
+    *)  # A payload that carries BUILD_MODE just wrote a fresh record (kept); a root/ tree has none,
+        # so the old one (possibly "debug") is removed with the other debug pieces.
+        [ -f "$RES/BUILD_MODE" ] && KEEP_MODE=1
+        remove_debug ;;
+    esac
     # M.I.B.'s "NavActiveIgnore" (navignore_audi/_vw.jar, installed as NavActiveIgnore.jar)
     # replaces org.dsi.ifc.carplay.AppState so getAppStateID()/getOwner() always return 0:
     # the HMI no longer sees which resources CarPlay owns, which our lifecycle relies on.
@@ -211,6 +259,7 @@ uninstall)
     done < "$LIST"
     rm -f "$LIST"
     # restore in-place patched configs
+    remove_debug
     [ -e "$CFG.carplay-stock" ] && mv -f "$CFG.carplay-stock" "$CFG"
     [ -e "$DIO.carplay-stock" ] && mv -f "$DIO.carplay-stock" "$DIO"
     sync

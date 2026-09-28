@@ -1,5 +1,6 @@
 #!/bin/sh
 # Host-side C tests for the RGI hook framework and maneuver renderer.
+# Debug/release tooling: test_logcopy.sh (SD flight recorder), test_release_gate.sh (build gate).
 # Java/renderer suites: test_route_info.sh, test_java_transports.sh,
 # test_maneuver_native.sh.  Safe to run anywhere (no HU access).
 set -e
@@ -107,3 +108,9 @@ sh scripts/test_install_listing.sh
 
 printf '%-32s ' install_payload_test
 sh scripts/test_install_payload.sh
+
+printf '%-32s ' logcopy_test
+sh scripts/test_logcopy.sh
+
+printf '%-32s ' release_gate_test
+sh scripts/test_release_gate.sh
