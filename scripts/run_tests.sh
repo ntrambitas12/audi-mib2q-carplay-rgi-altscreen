@@ -15,6 +15,18 @@ cc -std=gnu99 -O1 -Wall -Wextra -Werror -Wno-unused-function \
     tests/maneuver_surface_test.c "$DEAD_STRIP" -lpthread -lm -o "$OUT/maneuver_surface"
 "$OUT/maneuver_surface"
 
+# Reroute bug hunt: real renderer command loop (main.c) with scripted commands and
+# stubbed GL/platform.  Non-fatal: prints "REPRODUCED <case>" or "PASS" and never
+# aborts the rest of this script.
+printf '%-32s ' maneuver_reroute_clear
+if cc -std=gnu99 -O1 -Wall -Wno-unused-function -Wno-unused-variable \
+        -Imaneuver_render -Icommon \
+        tests/maneuver_reroute_clear_test.c -lpthread -lm -o "$OUT/maneuver_reroute_clear"; then
+    "$OUT/maneuver_reroute_clear" || echo "maneuver_reroute_clear: FAILED (non-fatal)"
+else
+    echo "maneuver_reroute_clear: BUILD FAILED (non-fatal)"
+fi
+
 printf '%-32s ' gl_program_cache_test
 cc -std=gnu99 -O1 -Wall -Wextra -Werror -Wno-unused-function \
     -Imaneuver_render/hostcheck -Icommon tests/gl_program_cache_test.c -o "$OUT/gl_program_cache"
