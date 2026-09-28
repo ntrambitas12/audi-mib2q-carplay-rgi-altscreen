@@ -56,7 +56,7 @@ final class CurrentPositionScroll {
         deadline = lastClock = 0;
     }
 
-    private static int width(String text) {
+    static int width(String text) {
         VCTextData data = VCTextData.get();
         int result = 0;
         for (int i = 0; i < text.length();) {
@@ -67,7 +67,7 @@ final class CurrentPositionScroll {
         return result;
     }
 
-    private static int bytes(String text) {
+    static int bytes(String text) {
         int result = 0;
         for (int i = 0; i < text.length();) {
             int cp = VCUnicode.codePoint(text, i);
@@ -75,6 +75,103 @@ final class CurrentPositionScroll {
             i += VCUnicode.chars(cp);
         }
         return result;
+    }
+
+    /**
+     * Truncates `name` at a grapheme boundary and appends an ellipsis so that
+     * prefix + result + suffix fits in the SAME single-page width (WIDTH_64)
+     * and byte (MAX_BYTES) budget that build() uses for paging -- including
+     * the RTL paragraph-direction mark build() prepends (see directionMarkFor,
+     * the exact same detection build() runs on `source`), so the combined
+     * text this produces never triggers multi-page scrolling.  Returns `name`
+     * unchanged (no ellipsis) if it already fits.  `prefix` and `suffix` are
+     * measured verbatim and never truncated themselves; only `name` is
+     * shortened.  As a final guarantee, the candidate is re-checked against
+     * build()'s own authoritative page-count logic (via a scratch instance)
+     * and trimmed one more grapheme at a time until it genuinely fits.
+     */
+    static String fitWithEllipsis(String name, String prefix, String suffix) {
+        if (name == null) name = "";
+        if (prefix == null) prefix = "";
+        if (suffix == null) suffix = "";
+        String normalizedName = VCUnicode.nfc(name);
+        String normalizedSuffix = VCUnicode.nfc(suffix);
+        if (fitsOnePage(normalizedName + normalizedSuffix, prefix)) {
+            return name;
+        }
+        VCTextData data = VCTextData.get();
+        String ellipsis = data.covered(0x2026) ? "…" : "...";
+        // Same RTL paragraph-direction mark, and same bytes-only reservation for it,
+        // that build() computes and subtracts (build()'s availableWidth does NOT
+        // subtract directionMark width either -- matched here on purpose).
+        String directionMark = directionMarkFor(normalizedName + normalizedSuffix);
+        int availableWidth = WIDTH_64 - width(prefix) - width(normalizedSuffix);
+        int availableBytes = MAX_BYTES - bytes(prefix) - bytes(normalizedSuffix) - bytes(directionMark);
+        int fitWidth = availableWidth - width(ellipsis);
+        int fitBytes = availableBytes - bytes(ellipsis);
+        int[] boundaries = VCUnicode.boundaries(normalizedName);
+        int n = boundaries.length - 1;
+        int cutIndex = 0;
+        if (fitWidth > 0 && fitBytes > 0) {
+            int w = 0, b = 0;
+            for (int c = 0; c < n; c++) {
+                int segW = 0, segB = 0;
+                for (int i = boundaries[c]; i < boundaries[c + 1];) {
+                    int cp = VCUnicode.codePoint(normalizedName, i);
+                    segW += data.advance(cp);
+                    segB += VCUnicode.bytes(cp);
+                    i += VCUnicode.chars(cp);
+                }
+                if (w + segW > fitWidth || b + segB > fitBytes) break;
+                w += segW;
+                b += segB;
+                cutIndex = c + 1;
+            }
+        }
+        /* Safety net: the budget estimate above can still disagree with build()'s own page-count
+         * decision at the margin (e.g. this exact candidate's directionMark differs once the cut
+         * point changes the text's first-strong character, or build()'s word-boundary page
+         * splitting lands differently near the limit).  Re-run build() itself -- via a scratch
+         * instance, so it is the same code path production uses, not a re-implementation -- and
+         * keep trimming one more grapheme at a time until it genuinely reports a single page. */
+        while (cutIndex > 0 && !fitsOnePage(
+                normalizedName.substring(0, boundaries[cutIndex]) + ellipsis + normalizedSuffix, prefix)) {
+            cutIndex--;
+        }
+        if (cutIndex <= 0) return ellipsis;
+        return normalizedName.substring(0, boundaries[cutIndex]) + ellipsis;
+    }
+
+    /** RTL paragraph-direction mark build() prepends for this text: U+200F when the text's
+     * first-strong character is RTL, U+200E when it is LTR-but-contains-some-RTL, or "" when
+     * the text has no RTL codepoints at all.  Byte-for-byte the same bit tests and priority
+     * order build() uses on `source`, factored out so fitWithEllipsis can reserve an identical
+     * budget to what build() will actually render for the same text. */
+    private static String directionMarkFor(String text) {
+        VCTextData data = VCTextData.get();
+        boolean hasRtl = false;
+        int direction = 0;
+        for (int i = 0; i < text.length();) {
+            int cp = VCUnicode.codePoint(text, i);
+            int props = data.props(cp);
+            if ((props & 131072) != 0) hasRtl = true;
+            if (direction == 0) {
+                if ((props & 131072) != 0) direction = 2;
+                else if ((props & 262144) != 0) direction = 1;
+            }
+            i += VCUnicode.chars(cp);
+        }
+        return hasRtl ? (direction == 2 ? "‏" : "‎") : "";
+    }
+
+    /** Authoritative single-page check: actually runs build() (via a disposable scratch
+     * CurrentPositionScroll) on this exact (text, prefix) pair -- `after` is always "" for
+     * every real caller, since the pinned suffix is embedded in `text` itself -- and reports
+     * whether it would render as one page (no scrolling) with no fallback collapse. */
+    private static boolean fitsOnePage(String text, String prefix) {
+        CurrentPositionScroll probe = new CurrentPositionScroll();
+        probe.configure(text, prefix, "", true);
+        return !probe.fallback && probe.starts.length <= 1;
     }
 
     private void build() {

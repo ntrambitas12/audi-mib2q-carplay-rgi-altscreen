@@ -56,6 +56,12 @@ public class BAPBridge {
     private static final int BARGRAPH_ACTION_PERCENT_OF_PREPARE = 15;
     private static final int BARGRAPH_BLINK_PERCENT = 20;
     private static final int ACTION_BLINK_INTERVAL_MS = 600;
+    /* Absolute blink lower bound: 30.48 m (100 ft), represented exactly in
+     * centimeters to avoid representing 30.48 as a float. Below this distance
+     * the percent-based blink zone (BARGRAPH_BLINK_PERCENT of the denominator)
+     * would otherwise still trigger flashing far too early on long denominators
+     * (e.g. ~1050 ft on the 1600 m highway denominator). */
+    private static final int BLINK_MAX_DISTANCE_CM = 3048;
 
     /* BAP distance units defined by Audi's BAPDistanceFormatter. */
     private static final int BAP_DIST_UNIT_METERS = 0;
@@ -66,6 +72,17 @@ public class BAPBridge {
     private static final int BAP_DIST_UNIT_QUARTER_MILES = 5;
     /* Audi BAP distance values are scaled by 10 (e.g. 1000 ft is 10000). */
     private static final int BAP_DISTANCE_SCALE_FACTOR = 10;
+
+    /* CarPlay dist_maneuver_units values (hook/routeguidance/rgd_tlv.h DIST_UNIT_*):
+     * 0=KM, 1=MILES, 2=M, 3=YARDS, 4=FT. */
+    private static final int CARPLAY_DIST_UNIT_KM     = 0;
+    private static final int CARPLAY_DIST_UNIT_MILES  = 1;
+    private static final int CARPLAY_DIST_UNIT_METERS = 2;
+    private static final int CARPLAY_DIST_UNIT_YARDS  = 3;
+    private static final int CARPLAY_DIST_UNIT_FEET   = 4;
+
+    private static final double METERS_TO_FEET  = 3.280839895;
+    private static final double METERS_PER_MILE = 1609.344;
 
     /* BAP ManeuverState (FctID 55) values. */
     private static final int BAP_MANEUVER_STATE_INACTIVE = 0;
@@ -97,6 +114,12 @@ public class BAPBridge {
     private volatile boolean bapPresentationActive = false;
     /* Cache for formatted distance in FctID 19 to avoid continuous scroll resets. */
     private String lastFormattedTurnDistance = "";
+    /* Latest CarPlay-supplied distance-to-maneuver display value (dist_maneuver_str /
+     * dist_maneuver_units), refreshed from RouteGuidance.State whenever DIRTY_DIST_MAN
+     * fires. formatDistanceToTurn() is the single resolver that prefers this verbatim
+     * value (when parseable and unit-system-compatible) over formatting from meters. */
+    private String carPlayDistManStr = null;
+    private int carPlayDistManUnits = -1;
 
     /* CarPlay owns FctID 19/20/21/22/46 for the whole active RGI interval. */
     private String latchedPositionText = "";
@@ -320,15 +343,26 @@ public class BAPBridge {
      * resetActionBlinkState().  No way for an orphan thread to send a
      * tick using a fresh generation's state.
      */
+    /**
+     * Single source of truth for "should the bargraph be flashing right now".
+     * Requires both the existing percent-of-denominator rule AND an absolute
+     * distance cap (BLINK_MAX_DISTANCE_CM) so long denominators (highway) can
+     * never trigger flashing hundreds of feet/meters out. Consolidates the
+     * four call sites that used to duplicate this check independently.
+     */
+    private static boolean isInBlinkZone(int distM, int denomM) {
+        if (distM <= 0 || denomM <= 0 || distM > denomM) return false;
+        if (distM * 100 >= BLINK_MAX_DISTANCE_CM) return false;
+        int pct = (distM * 100) / denomM;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        return pct < BARGRAPH_BLINK_PERCENT;
+    }
+
     private boolean sendActionBlinkTick(int myGen) {
         synchronized (this) {
             if (myGen != actionBlinkGeneration) return false;
-            if (!blinkArmed || blinkDistM <= 0 || blinkBargraphDenominatorM <= 0
-                    || blinkDistM > blinkBargraphDenominatorM) return true;
-            int linBargraph = (blinkDistM * 100) / blinkBargraphDenominatorM;
-            if (linBargraph < 0) linBargraph = 0;
-            if (linBargraph > 100) linBargraph = 100;
-            if (linBargraph >= BARGRAPH_BLINK_PERCENT) {
+            if (!blinkArmed || !isInBlinkZone(blinkDistM, blinkBargraphDenominatorM)) {
                 actionBlinkFull = true;
                 return true;
             }
@@ -422,16 +456,173 @@ public class BAPBridge {
         appConnectorNavi.updateDistanceToDestination(fd.value, fd.unit, isStopOver);
     }
 
+    /**
+     * Single resolver for distance-to-maneuver, used for BOTH the FctID 18 native
+     * cluster distance (via sendDistanceToManeuverRaw) AND the VC status text (via
+     * formatTurnDistanceForText). Prefers CarPlay's own already-localized display
+     * value (dist_maneuver_str/dist_maneuver_units) verbatim when it is present,
+     * parseable, and in the same unit system as the car; otherwise falls back to
+     * formatting from meters in the car's system with CarPlay-like rounding.
+     */
     private FormattedDistance formatDistanceToTurn(int meters) {
         if (meters <= 0) return new FormattedDistance(-1, 0);
         try {
             boolean metric = isMetricDistanceUnits();
-            BAPDistanceFormatter.BAPDistance d = distanceFormatter.formatDistanceToTurn(meters, metric);
-            return new FormattedDistance(d.getValue(), d.getUnit());
+            FormattedDistance fromCarPlay =
+                resolveCarPlayDistance(carPlayDistManStr, carPlayDistManUnits, metric);
+            if (fromCarPlay != null) return fromCarPlay;
+            return formatDistanceFallback(meters, metric);
         } catch (Throwable t) {
             Log.w(TAG, "formatDistanceToTurn failed, using invalid distance: " + t.getMessage());
             return new FormattedDistance(-1, 0);
         }
+    }
+
+    /**
+     * Verbatim path: use CarPlay's own number+unit when present, parseable, and
+     * in the same unit system (metric/imperial) as the car. Returns null when
+     * any of those conditions fail, so the caller can fall back to formatting
+     * from meters.
+     */
+    private static FormattedDistance resolveCarPlayDistance(String carPlayStr, int carPlayUnits,
+                                                              boolean carMetric) {
+        if (carPlayStr == null || carPlayStr.length() == 0) return null;
+        boolean carPlayMetric;
+        int bapUnit;
+        switch (carPlayUnits) {
+            case CARPLAY_DIST_UNIT_KM:     carPlayMetric = true;  bapUnit = BAP_DIST_UNIT_KILOMETERS; break;
+            case CARPLAY_DIST_UNIT_METERS: carPlayMetric = true;  bapUnit = BAP_DIST_UNIT_METERS; break;
+            case CARPLAY_DIST_UNIT_MILES:  carPlayMetric = false; bapUnit = BAP_DIST_UNIT_MILES; break;
+            case CARPLAY_DIST_UNIT_YARDS:  carPlayMetric = false; bapUnit = BAP_DIST_UNIT_YARDS; break;
+            case CARPLAY_DIST_UNIT_FEET:   carPlayMetric = false; bapUnit = BAP_DIST_UNIT_FEET; break;
+            default: return null; /* unknown/absent unit -> can't verify system match */
+        }
+        if (carPlayMetric != carMetric) return null; /* different unit system than the car -> fall back */
+        double number = parseLeadingNumber(carPlayStr);
+        if (Double.isNaN(number) || number < 0) return null;
+        int value = (int) Math.round(number * (double) BAP_DISTANCE_SCALE_FACTOR);
+        if (value <= 0) return null;
+        return new FormattedDistance(value, bapUnit);
+    }
+
+    /** True for a character CarPlay might use as a thousands-grouping separator:
+     * ASCII comma, or the narrow-no-break/no-break/thin space variants some
+     * locales use in place of a comma. */
+    private static boolean isThousandsGroupingSeparator(char c) {
+        return c == ',' || c == ' ' || c == ' ' || c == ' ';
+    }
+
+    /** Parses the leading decimal number out of a CarPlay display string (e.g.
+     * "0.3", "3", "1.2 mi", "1,200" all yield their numeric prefix). NaN if none
+     * found. A thousands-grouping separator (see isThousandsGroupingSeparator)
+     * is consumed ONLY when followed by exactly 3 digits before the next
+     * non-digit/'.' (so "1,200" -> 1200, "12,500" -> 12500); any other use of
+     * one of those characters -- most importantly a decimal comma such as
+     * "0,3" or "1,2" -- is a hard parse failure (NaN) rather than a silent
+     * truncation, so the caller falls back to formatting from meters. */
+    private static double parseLeadingNumber(String s) {
+        int i = 0, n = s.length();
+        while (i < n && Character.isWhitespace(s.charAt(i))) i++;
+        boolean neg = false;
+        if (i < n && (s.charAt(i) == '-' || s.charAt(i) == '+')) {
+            neg = s.charAt(i) == '-';
+            i++;
+        }
+        StringBuffer digits = new StringBuffer();
+        boolean sawDigit = false;
+        while (true) {
+            int j = i;
+            while (j < n && Character.isDigit(s.charAt(j))) j++;
+            int groupLen = j - i;
+            if (groupLen == 0) break;
+            digits.append(s.substring(i, j));
+            sawDigit = true;
+            i = j;
+            if (i < n && isThousandsGroupingSeparator(s.charAt(i))) {
+                int k = i + 1;
+                while (k < n && Character.isDigit(s.charAt(k))) k++;
+                if (k - (i + 1) == 3) {
+                    /* Valid grouping separator: consume it, loop appends the next group. */
+                    i = i + 1;
+                    continue;
+                }
+                /* A grouping-separator character that is NOT followed by exactly 3 digits --
+                 * most commonly a decimal comma ("0,3") -- must not be silently truncated
+                 * into the wrong number. Reject the whole string. */
+                return Double.NaN;
+            }
+            break;
+        }
+        if (!sawDigit) return Double.NaN;
+        if (i < n && s.charAt(i) == '.') {
+            int j = i + 1;
+            while (j < n && Character.isDigit(s.charAt(j))) j++;
+            /* Only consume the '.' when at least one fractional digit follows;
+             * otherwise leave i where it was so a bare "3." still parses as "3". */
+            if (j > i + 1) {
+                digits.append(s.substring(i, j)); // includes the '.' itself
+                i = j;
+            }
+        }
+        String numStr = digits.toString();
+        if (numStr.length() == 0 || ".".equals(numStr)) return Double.NaN;
+        try {
+            double v = Double.parseDouble(numStr);
+            return neg ? -v : v;
+        } catch (NumberFormatException e) {
+            return Double.NaN;
+        }
+    }
+
+    /**
+     * Fallback path: format from meters in the car's unit system with
+     * CarPlay-like rounding, never producing the Audi quarter-mile format.
+     * Imperial: feet below 0.1 mi (528 ft) -- nearest 10 ft under 100 ft, nearest
+     * 50 ft from 100 ft up; miles at 0.1 mi steps below 10 mi; whole miles at/above.
+     * Metric: meters under 1 km -- nearest 10 m under 100 m, nearest 50 m from
+     * 100 m up; kilometers at 0.1 km steps below 10 km; whole km at/above.
+     */
+    private static FormattedDistance formatDistanceFallback(int meters, boolean metric) {
+        if (meters <= 0) return new FormattedDistance(-1, 0);
+        if (metric) {
+            if (meters < 1000) {
+                int step = (meters < 100) ? 10 : 50;
+                int rounded = roundToStep(meters, step);
+                if (rounded <= 0) rounded = step;
+                return new FormattedDistance(rounded * BAP_DISTANCE_SCALE_FACTOR, BAP_DIST_UNIT_METERS);
+            }
+            double km = meters / 1000.0;
+            if (km < 10.0) {
+                int tenths = (int) Math.round(km * 10.0);
+                if (tenths <= 0) tenths = 1;
+                return new FormattedDistance(tenths, BAP_DIST_UNIT_KILOMETERS);
+            }
+            int wholeKm = (int) Math.round(km);
+            if (wholeKm <= 0) wholeKm = 1;
+            return new FormattedDistance(wholeKm * BAP_DISTANCE_SCALE_FACTOR, BAP_DIST_UNIT_KILOMETERS);
+        } else {
+            double feet = meters * METERS_TO_FEET;
+            if (feet < 528.0) {
+                int step = (feet < 100.0) ? 10 : 50;
+                int rounded = roundToStep((int) Math.round(feet), step);
+                if (rounded <= 0) rounded = step;
+                return new FormattedDistance(rounded * BAP_DISTANCE_SCALE_FACTOR, BAP_DIST_UNIT_FEET);
+            }
+            double miles = meters / METERS_PER_MILE;
+            if (miles < 10.0) {
+                int tenths = (int) Math.round(miles * 10.0);
+                if (tenths <= 0) tenths = 1;
+                return new FormattedDistance(tenths, BAP_DIST_UNIT_MILES);
+            }
+            int wholeMiles = (int) Math.round(miles);
+            if (wholeMiles <= 0) wholeMiles = 1;
+            return new FormattedDistance(wholeMiles * BAP_DISTANCE_SCALE_FACTOR, BAP_DIST_UNIT_MILES);
+        }
+    }
+
+    private static int roundToStep(int value, int step) {
+        if (step <= 0) return value;
+        return ((value + step / 2) / step) * step;
     }
 
     private String formatTurnDistanceForText(int meters) {
@@ -460,17 +651,18 @@ public class BAPBridge {
                 int frac = value % 10;
                 return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
             }
-            case 5: /* Quarter miles */ {
-                int qm = value / 10;
-                if (qm < 4) {
-                    if (qm == 1) return "1/4 mi";
-                    if (qm == 2) return "1/2 mi";
-                    if (qm == 3) return "3/4 mi";
-                }
-                int whole = qm / 4;
-                int rem = qm % 4;
-                if (rem == 0) return whole + " mi";
-                return (whole > 0) ? (whole + " " + rem + "/4 mi") : (rem + "/4 mi");
+            case BAP_DIST_UNIT_QUARTER_MILES: {
+                /* Defensive: our own resolver never emits this unit, but if a
+                 * caller (e.g. Audi's BAPDistanceFormatter, used elsewhere for
+                 * distance-to-destination) ever routes a quarter-mile value
+                 * through here, never surface "1/4 mi"-style fraction text --
+                 * convert to the same 0.1-mi decimal-mile format as everywhere
+                 * else. value is quarter-miles*10. */
+                int quarterMiles = value / 10;
+                int milesTenths = (int) Math.round(quarterMiles * 2.5);
+                int whole = milesTenths / 10;
+                int frac = milesTenths % 10;
+                return (frac > 0) ? (whole + "." + frac + " mi") : (whole + " mi");
             }
             default:
                 return (value / 10) + " m";
@@ -500,11 +692,19 @@ public class BAPBridge {
             }
             return isMetric;
         } catch (Throwable t) {
+            /* Fallback is imperial only for the handful of countries that actually
+             * use it (US, GB, and the other two commonly cited imperial-distance
+             * countries, LR/MM); everywhere else defaults to metric. */
             try {
                 String c = java.util.Locale.getDefault().getCountry();
-                if ("US".equalsIgnoreCase(c) || "GB".equalsIgnoreCase(c)) return false;
-            } catch (Throwable t2) { }
-            return false;
+                if ("US".equalsIgnoreCase(c) || "GB".equalsIgnoreCase(c)
+                        || "LR".equalsIgnoreCase(c) || "MM".equalsIgnoreCase(c)) {
+                    return false;
+                }
+                return true;
+            } catch (Throwable t2) {
+                return true;
+            }
         }
     }
 
@@ -945,6 +1145,8 @@ public class BAPBridge {
         rendererPrimed = false;
         crConsecutiveSendFailures = 0;
         lastFormattedTurnDistance = "";
+        carPlayDistManStr = null;
+        carPlayDistManUnits = -1;
         /* Release FctIDs 19/20 only after our cleanup transaction has completed,
          * so stock cannot overwrite route text in the middle of rollback. */
         com.luka.carplay.core.ScreenNavStatusGate.setCurrentPositionInfoBlocked(false);
@@ -968,6 +1170,8 @@ public class BAPBridge {
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             lastFormattedTurnDistance = "";
+            carPlayDistManStr = null;
+            carPlayDistManUnits = -1;
             routeTextPublished = false;
             infoPhase = 0;
             lastFirstManeuverIdx = -1;
@@ -1009,6 +1213,8 @@ public class BAPBridge {
             com.luka.carplay.core.ScreenModule.setRgdActive(false);
             latchedPositionText = "";
             lastFormattedTurnDistance = "";
+            carPlayDistManStr = null;
+            carPlayDistManUnits = -1;
             routeTextPublished = false;
             infoPhase = 0;
             lastEtaSeconds = -1L;
@@ -1324,7 +1530,7 @@ public class BAPBridge {
                         bargraph = (distM * 100) / bargraphDenominatorM;
                         if (bargraph < 0) bargraph = 0;
                         if (bargraph > 100) bargraph = 100;
-                        if (bargraph < BARGRAPH_BLINK_PERCENT) {
+                        if (isInBlinkZone(distM, bargraphDenominatorM)) {
                             /* Blink zone: the 600 ms worker sends FctID 18 and
                              * maneuver_render together from one state snapshot. */
                         } else {
@@ -1558,16 +1764,41 @@ public class BAPBridge {
         String distStr = (idx >= 0 && s.distManeuverM > 0) ? formatTurnDistanceForText(s.distManeuverM) : "";
         lastFormattedTurnDistance = distStr;
 
-        /* Preserve the full payload. Street / signpost name + distance; distance is from shared formatter. */
+        /* Preserve the full payload. Street / signpost name + distance; distance is from shared formatter.
+         * When a distance is present, the " | <dist>" suffix (and any arrow prefix) are pinned and the
+         * name is shortened at a grapheme boundary with an ellipsis so the whole line fits in one page
+         * by CurrentPositionScroll's own width/byte measure -- it must never trigger multi-page scroll. */
         positionPrefix = positionSuffix = "";
         if (signPost.length() > 0) {
-            latchedPositionText = (distStr.length() > 0) ? (signPost + " | " + distStr) : signPost;
+            if (distStr.length() > 0) {
+                /* Same turn-arrow prefix the turnTo branch has always used, applied here
+                 * too (previously this branch set no prefix at all). Gated on distStr so
+                 * a signpost with no distance to show keeps its historical plain-text form. */
+                positionPrefix = getTurnArrowPrefix(s, idx);
+                String suffix = " | " + distStr;
+                String name = CurrentPositionScroll.fitWithEllipsis(signPost, positionPrefix, suffix);
+                latchedPositionText = name + suffix;
+            } else {
+                latchedPositionText = signPost;
+            }
         } else if (turnTo.length() > 0) {
-            latchedPositionText = (distStr.length() > 0) ? (turnTo + " | " + distStr) : turnTo;
             positionPrefix = getTurnArrowPrefix(s, idx);
+            if (distStr.length() > 0) {
+                String suffix = " | " + distStr;
+                String name = CurrentPositionScroll.fitWithEllipsis(turnTo, positionPrefix, suffix);
+                latchedPositionText = name + suffix;
+            } else {
+                latchedPositionText = turnTo;
+            }
         } else {
             String road = normalizeRouteText(s.currentRoad);
-            latchedPositionText = (distStr.length() > 0 && road.length() > 0) ? (road + " | " + distStr) : road;
+            if (distStr.length() > 0 && road.length() > 0) {
+                String suffix = " | " + distStr;
+                String name = CurrentPositionScroll.fitWithEllipsis(road, "", suffix);
+                latchedPositionText = name + suffix;
+            } else {
+                latchedPositionText = road;
+            }
         }
     }
 
@@ -1707,6 +1938,10 @@ public class BAPBridge {
         }
         if ((dirty & RouteGuidance.State.DIRTY_DIST_DEST) != 0) {
             lastDistanceToDestinationM = s.distDestM;
+        }
+        if ((dirty & RouteGuidance.State.DIRTY_DIST_MAN) != 0) {
+            carPlayDistManStr = s.distManeuverCarPlayStr;
+            carPlayDistManUnits = s.distManeuverCarPlayUnits;
         }
     }
 
@@ -2482,7 +2717,7 @@ public class BAPBridge {
             }
 
             int progressState=progressMode>0 ? RendererServer.PROGRESS_FILL : RendererServer.PROGRESS_OFF;
-            if(progressMode>0 && (distM*100)/bargraphDenominatorM < BARGRAPH_BLINK_PERCENT) {
+            if(progressMode>0 && isInBlinkZone(distM, bargraphDenominatorM)) {
                 synchronized(distanceToManeuverLock) {
                     if(hasLastDistM && lastDistM==distM && lastBarOn
                             && (lastProgressState==RendererServer.PROGRESS_BLINK_LOW
@@ -2548,7 +2783,7 @@ public class BAPBridge {
             if (pct < 0) pct = 0;
             if (pct > 100) pct = 100;
             remainingLevel = (pct * 16) / 100;
-            if (pct < BARGRAPH_BLINK_PERCENT) {
+            if (isInBlinkZone(distM, bargraphDenominatorM)) {
                 /* sendActionBlinkTick() supplies the same explicit phase to HUD
                  * and renderer. A distance-only update must not overwrite it. */
                 return;

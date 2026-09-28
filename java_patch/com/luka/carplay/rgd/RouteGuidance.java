@@ -147,6 +147,11 @@ public class RouteGuidance implements CarplayBus.Listener {
 
         /* Distance to maneuver */
         public int distManeuverM = -1;
+        /* CarPlay's own already-localized distance-to-maneuver display value
+         * (bus keys dist_maneuver_str / dist_maneuver_units, hook/routeguidance/
+         * rgd_hook.c:1025-1031). Cleared on the same paths that clear distManeuverM. */
+        public String distManeuverCarPlayStr = null;
+        public int distManeuverCarPlayUnits = -1;
 
         /* Time */
         public int etaSeconds = -1;
@@ -223,6 +228,8 @@ public class RouteGuidance implements CarplayBus.Listener {
             maneuverOrder = null;
             distDestM = -1;
             distManeuverM = -1;
+            distManeuverCarPlayStr = null;
+            distManeuverCarPlayUnits = -1;
             etaSeconds = -1;
             timeRemainingSeconds = -1;
             timeRemainingSampleSeconds = -1L;
@@ -864,6 +871,8 @@ public class RouteGuidance implements CarplayBus.Listener {
                 state.maneuverOrder = null;
                 state.maneuverCount = 0;
                 state.distManeuverM = -1;
+                state.distManeuverCarPlayStr = null;
+                state.distManeuverCarPlayUnits = -1;
                 state.distDestM = -1;
                 state.etaSeconds = -1;
                 state.timeRemainingSeconds = -1;
@@ -884,6 +893,8 @@ public class RouteGuidance implements CarplayBus.Listener {
             d.has("maneuver_list") ||
             d.has("dist_dest_m") ||
             d.has("dist_maneuver_m") ||
+            d.has("dist_maneuver_str") ||
+            d.has("dist_maneuver_units") ||
             d.has("eta_seconds") ||
             d.has("time_remaining_seconds") ||
             d.has("current_road") ||
@@ -1096,6 +1107,20 @@ public class RouteGuidance implements CarplayBus.Listener {
             int v = d.num("dist_maneuver_m", -1);
             if (v != state.distManeuverM) {
                 state.distManeuverM = v;
+                state.markDirty(State.DIRTY_DIST_MAN);
+            }
+        }
+        if (d.has("dist_maneuver_str")) {
+            String v = d.str("dist_maneuver_str");
+            if (!strEq(state.distManeuverCarPlayStr, v)) {
+                state.distManeuverCarPlayStr = v;
+                state.markDirty(State.DIRTY_DIST_MAN);
+            }
+        }
+        if (d.has("dist_maneuver_units")) {
+            int v = d.num("dist_maneuver_units", -1);
+            if (v != state.distManeuverCarPlayUnits) {
+                state.distManeuverCarPlayUnits = v;
                 state.markDirty(State.DIRTY_DIST_MAN);
             }
         }
