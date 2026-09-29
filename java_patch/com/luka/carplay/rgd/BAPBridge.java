@@ -52,15 +52,23 @@ public class BAPBridge {
     private static final int HYSTERESIS_BUFFER_M = 50;            // ~160 ft buffer to prevent boundary flapping
     private static final int CITY_PREPARE_THRESHOLD_M = 1500;
     private static final int HIGHWAY_PREPARE_THRESHOLD_M = 3000;
-    private static final int HIGHWAY_STEP_THRESHOLD_M = 2000;
     private static final int BARGRAPH_ACTION_PERCENT_OF_PREPARE = 15;
     private static final int ACTION_BLINK_INTERVAL_MS = 600;
-    /* Arrow fill thresholds, exact in centimeters: the arrow is completely full at 300 ft
-     * (91.44 m) and closer; the bargraph/level maps the remaining distance linearly from the
-     * denominator (100 % remaining) down to FULL_ARROW_CM (0 % remaining = full arrow).
-     * Blinking starts below 250 ft (76.2 m). */
-    private static final int FULL_ARROW_CM = 9144;
+    /* Arrow fill threshold, exact in centimeters.  The bargraph/level is REMAINING distance
+     * (FctID 18 stock semantics: 100 = far, 0 = at the maneuver; the renderer draws
+     * fill = 1 - level/16): 100 % remaining at the approach-open denominator (arrow empty),
+     * linear down to 0 % remaining at 250 ft (76.2 m, arrow completely full), which is also
+     * where blinking starts. */
     private static final int BLINK_BELOW_CM = 7620;
+
+    /* Reroute hold: a reroute pulse (route_state 5) inside the approach zone keeps the presentation
+     * and the last arrow up for at most this long instead of closing it (closing then re-opening
+     * within a few hundred ms left the Virtual Cockpit KDK pill on screen while we were back in
+     * stock ctx 74, i.e. a black pill). */
+    private static final int REROUTE_HOLD_MS = 2500;
+    /* After a close that should hide the pill, re-check Fct44 visibility and re-close. */
+    private static final int KDK_VERIFY_INTERVAL_MS = 1500;
+    private static final int KDK_VERIFY_MAX_RETRIES = 3;
 
     /* BAP distance units defined by Audi's BAPDistanceFormatter. */
     private static final int BAP_DIST_UNIT_METERS = 0;
@@ -143,7 +151,7 @@ public class BAPBridge {
 
     /* Approach mode controls only bargraph/blink timing. The real next-maneuver
      * descriptor remains visible at every distance. */
-    private boolean inApproachZone = false;
+    private volatile boolean inApproachZone = false;
     /* Track the primary maneuver's slot identity so we know when iOS
      * actually swapped the head of the list vs. just reordered/extended it.
      * mVer changes when the C hook reassigns a slot to a new iAP2 index. */
@@ -269,6 +277,214 @@ public class BAPBridge {
     }
 
 
+    /* ---- Reroute hold + KDK-close verification (one small bounded daemon timer) ----
+     * All state below is guarded by timerLock, which is never held while calling anything else
+     * (no nesting with `this`, distanceToManeuverLock or ScreenModule).  The single "BAPTimer"
+     * thread sleeps in timerLock.wait() until the earliest deadline and exits when idle. */
+    private final Object timerLock = new Object();
+    /* Serializes update() with the BAPTimer bodies (hold expiry, KDK re-close).  Lock order:
+     * updateLock -> timerLock / this; timerLock is never held while taking updateLock. */
+    private final Object updateLock = new Object();
+    private int rerouteHoldMs = REROUTE_HOLD_MS;
+    private int kdkVerifyMs = KDK_VERIFY_INTERVAL_MS;
+    private boolean rerouteHoldActive = false;
+    private long rerouteHoldDeadline = 0L;
+    private int rerouteHoldGen = 0;
+    private boolean kdkVerifyPending = false;
+    private long kdkVerifyDue = 0L;
+    private int kdkVerifyRetries = 0;
+    private int kdkVerifyGen = 0;
+    private boolean timerRunning = false;
+    private int timerThreadGen = 0;
+
+    /** Fct44 KDK visibility as acknowledged by the Virtual Cockpit (overridable for tests). */
+    protected boolean isKdkVisibleNow() {
+        return com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
+    }
+
+    private void ensureTimerThread() {
+        synchronized (timerLock) {
+            if (timerRunning) {
+                timerLock.notifyAll();
+                return;
+            }
+            timerRunning = true;
+            final int myGen = ++timerThreadGen;
+            Thread t = new Thread(new Runnable() {
+                public void run() {
+                    timerLoop(myGen);
+                }
+            }, "BAPTimer");
+            t.setDaemon(true);
+            t.start();
+        }
+    }
+
+    private void timerLoop(int myGen) {
+        while (true) {
+            int action = 0;      /* 1 = reroute-hold expiry, 2 = KDK verify */
+            int actionGen = 0;
+            synchronized (timerLock) {
+                if (myGen != timerThreadGen) return;
+                long now = System.currentTimeMillis();
+                long next = -1L;
+                if (rerouteHoldActive) {
+                    if (now >= rerouteHoldDeadline) {
+                        action = 1;
+                        actionGen = rerouteHoldGen;
+                    } else {
+                        next = rerouteHoldDeadline;
+                    }
+                }
+                if (action == 0 && kdkVerifyPending) {
+                    if (now >= kdkVerifyDue) {
+                        action = 2;
+                        actionGen = kdkVerifyGen;
+                    } else if (next < 0L || kdkVerifyDue < next) {
+                        next = kdkVerifyDue;
+                    }
+                }
+                if (action == 0) {
+                    if (next < 0L) {
+                        timerRunning = false;   /* idle: nothing pending, thread ends */
+                        return;
+                    }
+                    try {
+                        timerLock.wait(next - now);
+                    } catch (InterruptedException e) {
+                        /* re-evaluate deadlines */
+                    }
+                    continue;
+                }
+            }
+            try {
+                if (action == 1) expireRerouteHold(actionGen);
+                else verifyKdkClosed(actionGen);
+            } catch (Throwable t) {
+                Log.w(TAG, "BAPTimer action failed: " + t);
+            }
+        }
+    }
+
+    private void cancelRerouteHold() {
+        synchronized (timerLock) {
+            if (rerouteHoldActive) {
+                rerouteHoldActive = false;
+                ++rerouteHoldGen;
+                timerLock.notifyAll();   /* let an idle timer thread exit promptly */
+            }
+        }
+    }
+
+    private void cancelKdkVerify() {
+        synchronized (timerLock) {
+            if (kdkVerifyPending) {
+                kdkVerifyPending = false;
+                ++kdkVerifyGen;
+                timerLock.notifyAll();
+            }
+        }
+    }
+
+    /** Called after a close that is meant to hide the KDK pill. */
+    private void scheduleKdkVerify() {
+        synchronized (timerLock) {
+            kdkVerifyPending = true;
+            kdkVerifyRetries = 0;
+            kdkVerifyDue = System.currentTimeMillis() + kdkVerifyMs;
+            ++kdkVerifyGen;
+        }
+        ensureTimerThread();
+    }
+
+    /** Timer thread: the hold ran out with no RGI update to notice it. */
+    private void expireRerouteHold(int gen) {
+        synchronized (updateLock) {
+            synchronized (timerLock) {
+                if (!rerouteHoldActive || gen != rerouteHoldGen) return;
+                rerouteHoldActive = false;
+                ++rerouteHoldGen;
+            }
+            if (!bapPresentationActive && !com.luka.carplay.core.ScreenModule.isPresentationActive()) return;
+            Log.i(TAG, "Reroute hold expired after " + rerouteHoldMs + " ms: closing BAP presentation");
+            inApproachZone = false;
+            stopActionBlinkThread();
+            closeApproachPresentation("reroute-hold-expired", -1L, true, true, true);
+        }
+    }
+
+    /** Timer thread: was the pill really hidden?  Re-issue the (idempotent) close if not. */
+    private void verifyKdkClosed(int gen) {
+        synchronized (updateLock) {
+            boolean holdOn;
+            synchronized (timerLock) {
+                if (!kdkVerifyPending || gen != kdkVerifyGen) return;
+                holdOn = rerouteHoldActive;
+            }
+            boolean wantClosed = !bapPresentationActive
+                && !com.luka.carplay.core.ScreenModule.isPresentationActive() && !holdOn;
+            if (!wantClosed || !isKdkVisibleNow()) {
+                synchronized (timerLock) {
+                    if (gen == kdkVerifyGen) kdkVerifyPending = false;
+                }
+                return;
+            }
+            int retry;
+            synchronized (timerLock) {
+                retry = ++kdkVerifyRetries;
+                if (retry > KDK_VERIFY_MAX_RETRIES) {
+                    kdkVerifyPending = false;
+                } else {
+                    kdkVerifyDue = System.currentTimeMillis() + kdkVerifyMs;
+                }
+            }
+            if (retry > KDK_VERIFY_MAX_RETRIES) {
+                Log.w(TAG, "KDK still visible after " + KDK_VERIFY_MAX_RETRIES
+                    + " close retries; giving up");
+                return;
+            }
+            Log.i(TAG, "KDK still visible after close: retry " + retry);
+            closeBapPresentation();
+        }
+    }
+
+    /** Approach-zone EXIT: withdraw the BAP presentation, hand the cluster back to stock (ctx 74)
+     * and blank the renderer. Shared by update() and the reroute-hold expiry. */
+    private void closeApproachPresentation(String site, long routeGen, boolean rerouting,
+                                           boolean explicit, boolean shouldClear) {
+        boolean closed = closeBapPresentation();
+        if (closed) {
+            com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+            if (rendererClient != null) {
+                rendererClient.sendClear();
+                lastCrIdx = -1;
+                lastCrIcon = -1;
+                diagClearedAwaitingManeuver = true;
+                Log.i(TAG, "RGI-DIAG renderer CLEAR site=" + site + " gen=" + routeGen
+                    + " rerouting=" + rerouting + " explicit=" + explicit
+                    + " shouldClear=" + shouldClear);
+            }
+            synchronized (this) { rendererManeuverPending = false; }
+            scheduleKdkVerify();
+        } else {
+            Log.w(TAG, "BAP close incomplete; retaining presentation state for retry");
+        }
+    }
+
+    /** Force the next update to resend the maneuver: same invalidation as the renderer re-prime. */
+    private synchronized void invalidateRendererDedup() {
+        lastCrIcon = -1;
+        lastCrDirection = -99;
+        lastCrExitAngle = -9999;
+        lastCrDrivingSide = -1;
+        lastCrVer = -1;
+        lastCrIdx = -1;
+        lastCrRouteGeneration = -1L;
+        lastCrJunctionAngles = null;
+        lastCrSnapToRoad = false;
+        rendererManeuverPending = true;
+    }
+
     private void startActionBlinkThread() {
         final int myGen;
         synchronized (this) {
@@ -343,18 +559,18 @@ public class BAPBridge {
      * tick using a fresh generation's state.
      */
     /** Single source of truth for "should the bargraph be flashing right now": inside the
-     * denominator and closer than 250 ft (76.2 m).  Between 76.2 m and 91.44 m the arrow is
-     * solid full. */
+     * denominator and closer than 250 ft (76.2 m). */
     private static boolean isInBlinkZone(int distM, int denomM) {
         return distM > 0 && denomM > 0 && distM <= denomM && distM * 100 < BLINK_BELOW_CM;
     }
 
     /** Remaining-distance percent (0..100) shared by the cluster bar (FctID 18) and the renderer
-     * level: 0 at <= FULL_ARROW_CM (arrow full), 100 at the denominator, linear in between. */
+     * level: 100 at the denominator (approach-open distance; clamped when opened slightly beyond
+     * it by hysteresis), 0 at <= BLINK_BELOW_CM (76.2 m: arrow completely full), linear between. */
     static int bargraphPercent(int distM, int denomM) {
         int denomCm = denomM * 100, distCm = distM * 100;
-        if (denomCm <= FULL_ARROW_CM) return distCm <= FULL_ARROW_CM ? 0 : 100;
-        int pct = ((distCm - FULL_ARROW_CM) * 100) / (denomCm - FULL_ARROW_CM);
+        if (denomCm <= BLINK_BELOW_CM) return distCm <= BLINK_BELOW_CM ? 0 : 100;
+        int pct = ((distCm - BLINK_BELOW_CM) * 100) / (denomCm - BLINK_BELOW_CM);
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
         return pct;
@@ -903,6 +1119,7 @@ public class BAPBridge {
 
             success = true;
             bapPresentationActive = true;
+            cancelKdkVerify();
             Log.i(TAG, "openBapPresentation succeeded (rgType=" + ACTIVE_RGTYPE + ")");
             return true;
         } catch (Throwable t) {
@@ -1131,6 +1348,7 @@ public class BAPBridge {
      * renderer here would make the retry non-idempotent.  The session-long native-RG gate remains
      * shut; engageTakeover/disengageTakeover own that independently. */
     private void rollbackFailedStart() {
+        cancelRerouteHold();
         clearPositionScroll();
         com.luka.carplay.core.ScreenModule.rollbackRouteLifecycle();
         com.luka.carplay.core.ScreenModule.setRgdActive(false);
@@ -1164,6 +1382,8 @@ public class BAPBridge {
              * No BAP teardown, no renderer kill. iOS sends transient route_state=0
              * during maneuver transitions; full teardown causes HUD flicker + renderer
              * black screen. BAP teardown happens in onShutdown() on real disconnect. */
+            cancelRerouteHold();
+            cancelKdkVerify();
             stopActionBlinkThread();
             inApproachZone = false;
             closeBapPresentation();
@@ -1204,6 +1424,8 @@ public class BAPBridge {
             /* Defensive: stop action blink (it's also stopped on approach
              * zone exit, but onShutdown can be called from non-approach
              * states too — e.g., disconnect mid-route). */
+            cancelRerouteHold();
+            cancelKdkVerify();
             stopActionBlinkThread();
             inApproachZone = false;
             if (preserveSurface) {
@@ -1281,6 +1503,12 @@ public class BAPBridge {
      * ============================================================ */
 
     public boolean update(RouteGuidance.State s) {
+        synchronized (updateLock) {
+            return updateLocked(s);
+        }
+    }
+
+    private boolean updateLocked(RouteGuidance.State s) {
         if (!initialized || s == null) return false;
 
         int failureSerial = rendererSendFailureSerial;
@@ -1385,6 +1613,58 @@ public class BAPBridge {
             boolean inDisplayDistance = (!hasUsableDistance) || isArrival || (distM <= effectiveThresholdM);
             boolean nowApproach = hasManeuverList && showManeuver && !shouldClearManeuver && !explicitClear
                 && (isArrival || (hasUsableDistance ? inDisplayDistance : inApproachZone));
+
+            /* Reroute hold.  A reroute pulse inside the approach zone must not close the
+             * presentation: closing and re-opening ~350 ms later left the VC KDK pill up while
+             * we were back in stock ctx 74 (black pill).  Hold the presentation and the last
+             * arrow for at most rerouteHoldMs; the BAPTimer thread expires it even if no further
+             * RGI update arrives.  A genuine route end is never rerouting, so it closes at once. */
+            boolean holding = false;
+            boolean holdBegan = false;
+            boolean holdWasActive;
+            boolean presentationOpen = isRerouting && rerouteHoldMs > 0 && inApproachZone
+                && (bapPresentationActive || com.luka.carplay.core.ScreenModule.isPresentationActive());
+            synchronized (timerLock) {
+                holdWasActive = rerouteHoldActive;
+                long holdNow = System.currentTimeMillis();
+                if (isRerouting) {
+                    if (rerouteHoldActive) {
+                        if (holdNow < rerouteHoldDeadline) {
+                            holding = true;
+                        } else {
+                            /* expired: fall through to the normal approach-EXIT close */
+                            rerouteHoldActive = false;
+                            ++rerouteHoldGen;
+                        }
+                    } else if (presentationOpen) {
+                        rerouteHoldActive = true;
+                        rerouteHoldDeadline = holdNow + rerouteHoldMs;
+                        ++rerouteHoldGen;
+                        holding = true;
+                        holdBegan = true;
+                    }
+                } else if (rerouteHoldActive) {
+                    rerouteHoldActive = false;   /* route returned (or ended): hold is over */
+                    ++rerouteHoldGen;
+                }
+            }
+            if (holdBegan) {
+                Log.i(TAG, "Reroute hold: keeping BAP presentation open for up to "
+                    + rerouteHoldMs + " ms");
+                ensureTimerThread();
+            }
+            if (holding) {
+                /* Freeze the maneuver presentation: no clear, no close, no descriptor/distance/
+                 * state writes.  The return tick force-refreshes everything. */
+                nowApproach = inApproachZone;
+                explicitClear = false;
+                shouldClearManeuver = false;
+                dirty &= ~(RouteGuidance.State.DIRTY_MANEUVER_ICON
+                    | RouteGuidance.State.DIRTY_MANEUVER_LIST
+                    | RouteGuidance.State.DIRTY_MANEUVER_COUNT
+                    | RouteGuidance.State.DIRTY_MANEUVER_STATE
+                    | RouteGuidance.State.DIRTY_DIST_MAN);
+            }
             boolean approachChanged = (nowApproach != inApproachZone);
             if (approachChanged) {
                 dirty |= RouteGuidance.State.DIRTY_DIST_MAN
@@ -1409,6 +1689,18 @@ public class BAPBridge {
                 }
             }
 
+            if (holdWasActive && !isRerouting && nowApproach) {
+                /* Route came back inside the zone before the hold expired: presentation stayed
+                 * open (no close/open happened), so refresh to the NEW maneuver explicitly. */
+                dirty |= RouteGuidance.State.DIRTY_MANEUVER_ICON
+                       | RouteGuidance.State.DIRTY_MANEUVER_LIST
+                       | RouteGuidance.State.DIRTY_DIST_MAN
+                       | RouteGuidance.State.DIRTY_MANEUVER_STATE
+                       | RouteGuidance.State.DIRTY_LANE_GUIDANCE;
+                invalidateRendererDedup();
+                Log.i(TAG, "Reroute hold: route returned inside the zone; presentation kept open");
+            }
+
             /*
              * A route-generation change only needs a forced physical rebind when
              * the NEW route is actually inside the display approach window and
@@ -1417,7 +1709,7 @@ public class BAPBridge {
              * If navActive is false, the normal setNavActive(true) path below
              * performs the 74 -> 80 acquisition.
              */
-            if (routeRebindPending) {
+            if (routeRebindPending && !holding) {
                 if (hasManeuverList && hasUsableDistance) {
                     if (nowApproach) {
                         com.luka.carplay.core.ScreenModule.requestClusterContextRebind(
@@ -1436,22 +1728,8 @@ public class BAPBridge {
             if (!nowApproach) {
                 if (bapPresentationActive || com.luka.carplay.core.ScreenModule.isPresentationActive()) {
                     Log.i(TAG, "Approach zone EXIT: closing BAP presentation");
-                    boolean closed = closeBapPresentation();
-                    if (closed) {
-                        com.luka.carplay.core.ScreenModule.setPresentationActive(false);
-                        if (rendererClient != null) {
-                            rendererClient.sendClear();
-                            lastCrIdx = -1;
-                            lastCrIcon = -1;
-                            diagClearedAwaitingManeuver = true;
-                            Log.i(TAG, "RGI-DIAG renderer CLEAR site=exit-close-ok gen=" + s.routeGeneration
-                                + " rerouting=" + isRerouting + " explicit=" + explicitClear
-                                + " shouldClear=" + shouldClearManeuver);
-                        }
-                        synchronized (this) { rendererManeuverPending = false; }
-                    } else {
-                        Log.w(TAG, "BAP close incomplete; retaining presentation state for retry");
-                    }
+                    closeApproachPresentation("exit-close-ok", s.routeGeneration,
+                        isRerouting, explicitClear, shouldClearManeuver);
                 }
             } else {
                 if (!com.luka.carplay.core.ScreenModule.isPresentationActive()) {
@@ -1476,6 +1754,7 @@ public class BAPBridge {
                     Log.w(TAG, "Approach zone: renderer lost frame readiness; closing presentation");
                     if (closeBapPresentation()) {
                         com.luka.carplay.core.ScreenModule.setPresentationActive(false);
+                        scheduleKdkVerify();
                     }
                 }
             }
@@ -1699,7 +1978,7 @@ public class BAPBridge {
                             + " dirty=0x" + Integer.toHexString(dirty) + " approachChanged=" + approachChanged
                             + " inZone=" + inApproachZone + " lastCrIdx=" + lastCrIdx);
                     }
-                } else if (!nowApproach || explicitClear || shouldClearManeuver) {
+                } else if (!holding && (!nowApproach || explicitClear || shouldClearManeuver)) {
                     if (lastCrIdx != -1 || lastCrIcon != -1) {
                         rendererClient.sendClear();
                         lastCrIdx = -1;
@@ -3059,8 +3338,11 @@ public class BAPBridge {
         if (manIdx < 0 || s == null) {
             return -1;
         }
-        int rawStepM = (s.mDistance != null && manIdx < s.mDistance.length) ? s.mDistance[manIdx] : -1;
-        boolean isHighway = rawStepM > HIGHWAY_STEP_THRESHOLD_M || (s.mType != null && manIdx < s.mType.length && ManeuverMapper.isHighwayManeuver(s.mType[manIdx]));
+        /* MUST classify exactly like the approach-zone threshold in update() (maneuver type only).
+         * A step-length term here made a long-step city turn use the 1600 m highway denominator
+         * while the pill opened at 457 m, so the arrow was already ~80 % filled when it appeared. */
+        boolean isHighway = s.mType != null && manIdx < s.mType.length
+            && ManeuverMapper.isHighwayManeuver(s.mType[manIdx]);
         int policyCap = isHighway ? HIGHWAY_DISPLAY_DISTANCE_M : CITY_DISPLAY_DISTANCE_M;
         if (policyCap <= 0) return -1;
         /*

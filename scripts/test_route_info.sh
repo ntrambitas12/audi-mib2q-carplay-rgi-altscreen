@@ -35,6 +35,7 @@ CLASSPATH="$PATCH_JAR:$STOCK_JAR:$TOOLS_DIR/libs/org.osgi.framework-1.10.0.jar:$
     "$PROJECT_DIR/tests/ScreenModuleContextRaceTest.java" \
     "$PROJECT_DIR/tests/RouteContextRendererLifecycleTest.java" \
     "$PROJECT_DIR/tests/RerouteRendererRecoveryTest.java" \
+    "$PROJECT_DIR/tests/RerouteHoldAndKdkVerifyTest.java" \
     "$PROJECT_DIR/tests/ShortTurnRerouteBlinkTest.java" \
     "$PROJECT_DIR/tests/ShortTurnBlinkVisibilityTest.java" \
     "$PROJECT_DIR/tests/DistanceBargraphChainTest.java" \
@@ -66,6 +67,7 @@ CLASSPATH="$PATCH_JAR:$STOCK_JAR:$TOOLS_DIR/libs/org.osgi.framework-1.10.0.jar:$
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" ScreenModuleContextRaceTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RouteContextRendererLifecycleTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RerouteRendererRecoveryTest
+"$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" RerouteHoldAndKdkVerifyTest
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" ShortTurnRerouteBlinkTest || echo "ShortTurnRerouteBlinkTest FAILED (expected until fixed)"
 "$JDK_DIR/bin/java" -cp "$TEST_DIR:$CLASSPATH" ShortTurnBlinkVisibilityTest || echo "ShortTurnBlinkVisibilityTest FAILED (expected until fixed)"
 # This probe loads additional IBM J9 classes reconstructed from the stock JXE.

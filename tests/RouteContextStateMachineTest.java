@@ -71,6 +71,9 @@ public final class RouteContextStateMachineTest {
         setField(BAPBridge.class, bridge, "appConnectorNavi", service);
         setField(BAPBridge.class, bridge, "initialized", Boolean.TRUE);
         setField(BAPBridge.class, bridge, "bapSessionStarted", Boolean.TRUE);
+        /* The T16 reference model closes immediately on an authenticated route_state 5 in the zone,
+         * so run with the reroute hold disabled (hold: RerouteHoldAndKdkVerifyTest). */
+        setField(BAPBridge.class, bridge, "rerouteHoldMs", Integer.valueOf(0));
         ScreenModule.setRouteActive(true);
         ScreenModule.setPresentationActive(false);
         return bridge;

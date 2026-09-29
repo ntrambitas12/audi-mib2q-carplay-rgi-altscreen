@@ -184,7 +184,13 @@ public final class RerouteRendererRecoveryTest {
     }
 
     private static BAPBridge createBridge(MockRenderer renderer) throws Exception {
+        return createBridge(renderer, -1);
+    }
+
+    /** holdMs < 0 keeps the shipping REROUTE_HOLD_MS; 0 disables the reroute hold. */
+    private static BAPBridge createBridge(MockRenderer renderer, int holdMs) throws Exception {
         BAPBridge bridge = new BAPBridge();
+        if (holdMs >= 0) setField(BAPBridge.class, bridge, "rerouteHoldMs", Integer.valueOf(holdMs));
         CombiBAPServiceNavi service = (CombiBAPServiceNavi) Proxy.newProxyInstance(
             RerouteRendererRecoveryTest.class.getClassLoader(),
             new Class[]{CombiBAPServiceNavi.class},
@@ -272,8 +278,10 @@ public final class RerouteRendererRecoveryTest {
             RouteGuidance.State s2 = maneuverState(900L, 5, 900L, 1, -90, 200, 1);
             s2.dirtyMask = DIRTY_ROUTE_STATE_ONLY;
             bridge.update(s2);
-            check(renderer.clears == 1, "(a).2: reroute clears the renderer surface");
-            check("CLEAR".equals(renderer.lastPaintCommand()), "(a).2: last paint command is CLEAR");
+            // Reroute hold: presentation and last arrow stay up; no close, no CLEAR.
+            check(renderer.clears == 0, "(a).2: reroute hold defers the renderer CLEAR");
+            check(ScreenModule.isPresentationActive(), "(a).2: presentation held open during reroute");
+            check("MANEUVER".equals(renderer.lastPaintCommand()), "(a).2: last arrow kept");
 
             // 3. Reroute resolves: route_state 5->2, SAME generation, SAME
             //    maneuver ver/type/angle/distance -- byte-identical slot data.
@@ -290,6 +298,8 @@ public final class RerouteRendererRecoveryTest {
             // BAPBridge's own approachChanged detection force DIRTY_MANEUVER_ICON
             // back on for this very tick, independent of RouteGuidance's dirty
             // mask -- see the class comment above.
+            check(ScreenModule.isPresentationActive(), "(a).3: presentation still open (no close/open)");
+            check(renderer.clears == 0, "(a).3: no CLEAR at any point");
             check(renderer.maneuvers == maneuversBefore + 1,
                 "(a).3: no MANEUVER resent after reroute returned identical data "
                 + "(renderer.maneuvers stayed at " + maneuversBefore + " -- cluster pill would be black)");
@@ -437,8 +447,9 @@ public final class RerouteRendererRecoveryTest {
             } finally {
                 BapProxyHandler.failClose = false;
             }
-            check(ScreenModule.isPresentationActive(), "(e).2: failed close retains presentation");
-            check("CLEAR".equals(renderer.lastPaintCommand()), "(e).2: renderer cleared during reroute");
+            check(ScreenModule.isPresentationActive(), "(e).2: presentation retained");
+            check("MANEUVER".equals(renderer.lastPaintCommand()),
+                "(e).2: hold keeps the last arrow (no close is even attempted)");
 
             RouteGuidance.State s3 = maneuverState(940L, 1, 940L, 1, -90, 200, 1);
             s3.dirtyMask = DIRTY_ROUTE_STATE_ONLY;
@@ -447,6 +458,37 @@ public final class RerouteRendererRecoveryTest {
             check("MANEUVER".equals(renderer.lastPaintCommand()),
                 "(e).3: pill open but renderer left blank after failed-close reroute "
                 + "(last paint command: " + renderer.lastPaintCommand() + ")");
+        }
+
+        // ============================================================
+        // (e2) Same as (e) with the hold DISABLED: the pre-hold close path (renderer
+        //      cleared, close fails, presentation retained) must still self-heal.
+        // ============================================================
+        {
+            MockRenderer renderer = new MockRenderer();
+            BAPBridge bridge = createBridge(renderer, 0);
+            ScreenModule.setPresentationActive(false);
+
+            RouteGuidance.State s1 = maneuverState(941L, 1, 941L, 1, -90, 200, 1);
+            s1.markAllDirtyForReplay();
+            bridge.update(s1);
+            BapProxyHandler.failClose = true;
+            try {
+                for (int i = 0; i < 2; i++) {
+                    RouteGuidance.State r = maneuverState(941L, 5, 941L, 1, -90, 200, 1);
+                    r.dirtyMask = DIRTY_ROUTE_STATE_ONLY;
+                    bridge.update(r);
+                }
+            } finally {
+                BapProxyHandler.failClose = false;
+            }
+            check(ScreenModule.isPresentationActive(), "(e2).2: failed close retains presentation");
+            check("CLEAR".equals(renderer.lastPaintCommand()), "(e2).2: renderer cleared during reroute");
+            RouteGuidance.State s3 = maneuverState(941L, 1, 941L, 1, -90, 200, 1);
+            s3.dirtyMask = DIRTY_ROUTE_STATE_ONLY;
+            bridge.update(s3);
+            check("MANEUVER".equals(renderer.lastPaintCommand()),
+                "(e2).3: pill open but renderer left blank after failed-close reroute");
         }
 
         // ============================================================

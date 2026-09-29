@@ -174,6 +174,9 @@ public final class RouteContextRendererLifecycleTest {
         setField(BAPBridge.class, bridge, "initialized", Boolean.TRUE);
         setField(BAPBridge.class, bridge, "bapSessionStarted", Boolean.TRUE);
         setField(BAPBridge.class, bridge, "nativeStopAttempted", Boolean.TRUE);
+        /* These suites pin the approach-EXIT-on-reroute behaviour itself, so they run with the
+         * reroute hold disabled (the hold is covered by RerouteHoldAndKdkVerifyTest). */
+        setField(BAPBridge.class, bridge, "rerouteHoldMs", Integer.valueOf(0));
         setField(BAPBridge.class, bridge, "csRef", createClusterService());
         if (renderer != null) {
             setField(BAPBridge.class, bridge, "rendererClient", renderer);

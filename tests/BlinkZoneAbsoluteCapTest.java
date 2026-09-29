@@ -65,19 +65,26 @@ public final class BlinkZoneAbsoluteCapTest {
             check(got == (cases[i][2] == 1), "isInBlinkZone(" + cases[i][0] + ", " + cases[i][1] + ") expected " + cases[i][2]);
         }
 
-        // Shared bar/level mapping: 0 % remaining (arrow full) at <= 91.44 m, 100 % at the denominator,
-        // linear in between.  Whole meters: 91 m is full, 92 m is still 0 % (first percent needs ~95 m).
+        // Shared bar/level mapping (REMAINING percent, FctID 18 stock semantics; the renderer draws
+        // fill = 1 - level/16): 100 % remaining (arrow EMPTY) at the approach-open denominator,
+        // linear, 0 % remaining (arrow completely FULL) at 76.2 m where blinking starts.  There is
+        // no 91.44 m full point any more.  Beyond the denominator (hysteresis) clamps to 100.
         Method percent = BAPBridge.class.getDeclaredMethod("bargraphPercent", Integer.TYPE, Integer.TYPE);
         percent.setAccessible(true);
-        int[][] pcts = { {1, 457, 0}, {91, 457, 0}, {92, 457, 0}, {457, 457, 100}, {1600, 1600, 100},
-                         {274, 457, 50} };   // (27400-9144)*100/(45700-9144) = 49 -> tolerance below
+        int[][] pcts = { {1, 457, 0}, {76, 457, 0}, {77, 457, 0}, {457, 457, 100}, {507, 457, 100},
+                         {1600, 1600, 100}, {1650, 1600, 100}, {0, 457, 0},
+                         {267, 457, 50},      // (26700-7620)*100/(45700-7620) = 50
+                         {838, 1600, 50} };   // (83800-7620)*100/(160000-7620) = 49.99 -> 49
         for (int i = 0; i < pcts.length; i++) {
             int got = ((Integer) percent.invoke(null, Integer.valueOf(pcts[i][0]), Integer.valueOf(pcts[i][1]))).intValue();
-            if (pcts[i][2] == 50) check(got >= 48 && got <= 51, "midpoint percent " + got);
+            if (pcts[i][2] == 50) check(got >= 49 && got <= 50, "midpoint percent " + got);
             else check(got == pcts[i][2], "bargraphPercent(" + pcts[i][0] + ", " + pcts[i][1] + ") = " + got);
         }
+        // 91 m is no longer "full": it is still well above 0 % remaining.
+        check(((Integer) percent.invoke(null, Integer.valueOf(91), Integer.valueOf(457))).intValue() > 0,
+            "91 m must not be the full point any more");
         int prev = -1;
-        for (int d = 91; d <= 457; d++) {
+        for (int d = 1; d <= 457; d++) {
             int got = ((Integer) percent.invoke(null, Integer.valueOf(d), Integer.valueOf(457))).intValue();
             check(got >= prev && got >= 0 && got <= 100, "percent monotone at " + d + " m");
             prev = got;
