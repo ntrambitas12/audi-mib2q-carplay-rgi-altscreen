@@ -7,7 +7,7 @@ import java.lang.reflect.Proxy;
 
 /**
  * Exercises the shipping isInBlinkZone(int,int) consolidation directly, plus the actual
- * sendActionBlinkTick call site, to prove the new BLINK_MAX_DISTANCE_CM (30.48 m / 100 ft)
+ * sendActionBlinkTick call site, to prove the new BLINK_MAX_DISTANCE_CM (76.2 m / 250 ft)
  * absolute cap now gates blinking in addition to the pre-existing BARGRAPH_BLINK_PERCENT
  * percent-of-denominator rule -- fixing the bug where a long highway denominator (1600 m)
  * let the bargraph flash as far out as ~1050 ft.
@@ -54,9 +54,9 @@ public final class BlinkZoneAbsoluteCapTest {
         // Blink only when 0 < distM and distM*100 < 7620 (76.2 m = 250 ft) and inside the zone.
         // distM is whole meters, so the 76.2 m edge is tested at 76 (blink) and 77 (no blink).
         int[][] cases = {   // dist, denominator, expected blink (1/0)
-            {29, 457, 1}, {29, 1600, 1}, {76, 457, 1}, {76, 1600, 1},   // below 250 ft: blink
+            {29, 457, 1}, {29, 1600, 1}, {61, 457, 1}, {76, 457, 1}, {76, 1600, 1},   // below 250 ft: blink
             {77, 457, 0}, {77, 1600, 0},                                  // 76.2 m and beyond: solid
-            {91, 457, 0}, {92, 457, 0}, {61, 457, 0}, {300, 1600, 0},     // 300 ft zone and far: no blink
+            {91, 457, 0}, {92, 457, 0}, {300, 1600, 0},                   // 300 ft zone and far: no blink
             {0, 100, 0}, {10, 0, 0}, {50, 40, 0}                          // invalid / outside zone
         };
         for (int i = 0; i < cases.length; i++) {
