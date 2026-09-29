@@ -11,12 +11,6 @@ sources:
   - code: scripts/test_install_dio.sh
   - code: scripts/test_install_listing.sh
   - code: scripts/test_install_payload.sh
-  - code: scripts/package_release.sh
-  - code: scripts/build_java.sh
-  - code: deploy/smartphone_integrator/carplay_logcopy.sh
-  - code: scripts/test_logcopy.sh
-  - code: scripts/test_release_gate.sh
-  - code: java_patch/com/luka/carplay/rgd/RgiDiag.java
   - code: deploy/smartphone_integrator/carplay_child.json
   - code: maneuver_render/main.c
 reconciles:
@@ -402,8 +396,7 @@ hook logs nothing about them.
 
 **With M.I.B.:** copy `uninstall_MoreIncredibleBash/` over the card and run the custom script. It
 needs no payload tree: it renames every `*.carplay-stock` under `/mnt/app` and `/mnt/system` back to
-the original (the SI json and `dio_manager.json`), then deletes the eight owned files, every
-debug piece (see [Debug vs release builds](#-debug-vs-release-builds)) and the
+the original (the SI json and `dio_manager.json`), then deletes the eight owned files and the
 renderer's shader cache `/mnt/persist/var/app/luka_carplay_maneuver`. `custom.sh
 uninstall` from the install card is a second path while the payload tree is still on it.
 
@@ -416,9 +409,6 @@ mv $F/smartphone_integrator.json.carplay-stock $F/smartphone_integrator.json
 mv $F/dio_manager.json.carplay-stock $F/dio_manager.json
 cd /mnt/app/root/hooks && rm -f libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh
 rm -f /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar
-# debug installs only (harmless if absent):
-rm -f /mnt/app/root/hooks/carplay_logcopy.sh /mnt/app/root/hooks/carplay_build_mode /mnt/app/carplay_verbose
-[ -f /tmp/carplay_logcopy.pid ] && kill $(cat /tmp/carplay_logcopy.pid); rm -f /tmp/carplay_logcopy.pid
 rm -rf /mnt/persist/var/app/luka_carplay_maneuver
 sync
 ```
@@ -436,98 +426,6 @@ the hook and jar listing, the two configs we patch and cores of `dio_manager`, `
 `/tmp/carplay_verbose`, so: run once, reconnect the phone and use CarPlay, run again to save the
 verbose session. The marker is in RAM and goes away on reboot; hook and Java log read it at every
 CarPlay session start. Nothing is deleted on the unit. Checked by `scripts/test_logging_mib.sh`.
-
-## 🐞 Debug vs release builds
-
-There are two build flavours. **Debug is the default** (for now every build is a debug build); a
-release build is the same code with every debug-only piece removed.
-
-### What a debug build adds
-
-| Piece | What it does |
-|---|---|
-| **Persistent verbose** | The installer creates `/mnt/app/carplay_verbose`. `Log.java` and the hook honor it at every CarPlay session start, and unlike `/tmp/carplay_verbose` it survives a reboot. |
-| **SD flight recorder** | `carplay_logcopy.sh` (in `/mnt/app/root/hooks/`) is started by `carplay_startup.sh` as its **own background process** (`nice -n 10`, `LD_PRELOAD` cleared, no part of the hook/renderer supervision - see [supervisor-lifecycle](supervisor-lifecycle.md)). Every **15 s** it appends only the **new bytes** of the CarPlay logs to the card: `/tmp/carplay_*.log` (`carplay_java.log` first - it wins when the pass budget is short - then `carplay_hook.log`, `carplay_wrapper.log`, ...), their rotated `.1` files and `/tmp/maneuver_render.log`. Nothing else in `/tmp` is copied. |
-| **RGI-DIAG** | The reroute/CLEAR/blank-renderer diagnostics in the Java jar (`RgiDiag.class`, `RGI-DIAG` lines in `/tmp/carplay_java.log`). |
-| **Build mode record** | `/mnt/app/root/hooks/carplay_build_mode` (`debug`/`release` + the build id). |
-
-The recorder writes to `<card>/carplay_logs/live_NNN/` - `NNN` is the highest existing `live_*` + 1,
-chosen once **per copier run** (a copier normally runs from the first phone connect after a boot until
-the next reboot, but a restarted copier takes a new number; same rule as the
-[logging script](#-collect-logs), so a deleted number is never reused) - with one file per log, an
-`info.txt` (unit clock, build id, uptime) and a marker line where a log rotated
-(`--- ... rotated ---`, the unread tail of the old file first, then the new file from byte 0, even if it
-already regrew past the old offset) or was truncated in place by the monitor's size cap
-(`--- ... truncated ---`). The card is any of `/fs/sda0`, `/fs/sdb0`, `/fs/usb0_0` (or their
-`/net/mmx/` twins) that has a `carplay_logs/` or `mod/` folder and is writable (`mount -uw` is tried).
-With no usable card a pass is silently skipped and retried 15 s later; nothing ever waits, and the
-card can be pulled at any time. A card that has `carplay_logs/` or `mod/` but stays **read-only** gets
-a `mount -uw` retry at most **once every 20 passes (~5 min)** per mount (the count restarts when the
-card disappears and reappears). A card that was probed writable is not re-probed each pass, only after
-a failed write; `sync` runs after every pass that wrote something (never after an idle pass), so a power-off loses at most ~15 s. Bounds: **20 MB in total** over all `live_*` folders (the oldest
-`live_*` folder goes first, other folders such as the numbered `001` logging saves are never touched;
-one folder rolls over at a quarter of the cap), and **at most 512 KB per pass** - after a long card
-absence only the tail is copied and a `--- carplay_logcopy: skipped N bytes ... ---` line says how
-much was dropped. It survives rotation and truncation, never exits on an error, is a single instance
-(pid file `/tmp/carplay_logcopy.pid`) and stops by itself when `/mnt/app/carplay_verbose` is removed.
-
-**Where to look after a drive:** the card's `carplay_logs/live_NNN/` (newest number = the last boot).
-**Power cut caveat:** up to ~15 s of the very end can be missing (the last pass never ran) and a cut
-mid-write can truncate the last line; running the logging script (**Collect logs**) still snapshots
-`/tmp` at that moment. Debug logging is not free (extra card writes every 15 s while CarPlay logs) -
-that is what the release build removes.
-
-### Building a release
-
-`package_release.sh` only assembles files; **build them first**: `build/libcarplay_hook.so`
-(`scripts/build_hook.sh`), `build/maneuver_render` (`scripts/build_renderers.sh`) and
-`build/carplay_hook.jar` (`scripts/build_java.sh`, in the same mode as the package); the flag atlas
-comes from `maneuver_render/resources/flag_atlas.rgba`. A missing input or a jar built in the other
-mode stops it with a message.
-
-```bash
-bash scripts/build_hook.sh && bash scripts/build_renderers.sh      # once per source change
-CARPLAY_RELEASE=1 bash scripts/build_java.sh          # jar without RGI-DIAG (BuildFlags.DIAG=false)
-CARPLAY_RELEASE=1 bash scripts/package_release.sh     # payload: build/payload/mod/  (copy to the SD card)
-bash scripts/build_java.sh && bash scripts/package_release.sh   # the same two, debug flavour
-```
-
-`CARPLAY_RELEASE=1` is the **only** switch. It makes the build **strip**: `RgiDiag.class` (all diagnostic
-state and log text lives there; `BAPBridge` reaches it only through `if (BuildFlags.DIAG) { ... }`, which
-javac folds away when `DIAG` is `false`), `carplay_logcopy.sh` (not in the payload), the
-logcopy start block in `carplay_startup.sh`, and the persistent verbose marker (not created).
-Normal warning/error logging (`Log.w`/`Log.e` to the bounded `/tmp/carplay_java.log`) **stays**, as do
-the runtime-gated `Log.i`/`Log.d` calls - with no marker they stay quiet.
-
-**Verifying:** `build_java.sh` does it for you in release mode and **fails the build** if the jar contains
-any `RgiDiag` entry, any class whose bytes reference `RgiDiag` (an unguarded call site leaves a
-constant-pool reference even without the class) or the text `RGI-DIAG` in any class - nested classes
-included (`unzip` is required); it records the mode in
-`build/carplay_hook.mode`, and `package_release.sh` refuses a jar built in the other mode. By hand:
-
-```bash
-unzip -l build/carplay_hook.jar | grep RgiDiag      # no output
-unzip -q -o build/carplay_hook.jar -d /tmp/j && ! grep -rlaE 'RGI-DIAG|RgiDiag' /tmp/j --include='*.class'
-ls build/payload/mod/carplay | grep logcopy         # no output
-```
-
-### Installing over an existing unit
-
-The payload carries `mod/carplay/BUILD_MODE` (first line `debug` or `release`; the installer records it
-on the unit as `carplay_build_mode`). A debug payload must also contain `carplay_logcopy.sh` - like every
-other asset, a payload missing it is refused before anything is written. **A release install over a
-debug unit removes the debug pieces**: the recorder script, `/mnt/app/carplay_verbose` - **including one
-you created by hand** - and the copier's `/tmp/carplay_logcopy.pid` (a running copier is sent
-`SIGTERM`); the release `carplay_startup.sh` replaces the debug one, and `carplay_build_mode` is
-rewritten (flat payload) or removed (root/ tree). The uninstaller (both paths) removes all of them too,
-the hand-made verbose marker included. A root-tree payload without `BUILD_MODE` counts as release.
-
-**Older flat payloads are refused.** `BUILD_MODE` is now part of the all-or-nothing check, so a flat
-`mod/carplay/` staged before this change (no `BUILD_MODE`) stops with `release incomplete, missing in
-...: BUILD_MODE`. Re-stage it with `scripts/package_release.sh`; by hand, add a `BUILD_MODE` file whose
-first line is `release` (or `debug`, which also requires `carplay_logcopy.sh`). Checked by `scripts/test_install_payload.sh` (debug/release payloads,
-cleanup, refusal, uninstall), `scripts/test_logcopy.sh` (the recorder) and `scripts/test_release_gate.sh`
-(the build gate).
 
 ## ⚠️ Traps
 

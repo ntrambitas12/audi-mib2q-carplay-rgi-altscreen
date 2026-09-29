@@ -45,20 +45,6 @@ echo "===== CarPlay generation pid=$DIO_PID ppid=${PPID:-unknown} =====" >> "$WL
 LD_PRELOAD= "$H/carplay_monitor.sh" "$DIO_PID" </dev/null >>"$WLOG" 2>&1 &
 MONITOR_PID=$!
 
-# DEBUG-LOGCOPY-BEGIN (debug builds only; scripts/package_release.sh strips this block in release)
-# Flight recorder: its own background process, low priority, LD_PRELOAD cleared, no ownership of
-# anything the monitor/hook/renderer supervision uses.  A second generation finds the live pidfile
-# and the copier exits at once (single instance).  Never affects dio_manager: failure is ignored.
-if [ -x "$H/carplay_logcopy.sh" ]; then
-    CP_LOGCOPY_NICE=
-    for cp_logcopy_n in /bin/nice /usr/bin/nice /proc/boot/nice; do
-        [ -x "$cp_logcopy_n" ] && { CP_LOGCOPY_NICE="$cp_logcopy_n -n 10"; break; }
-    done
-    # fds 3-9 closed so the copier inherits nothing from the wrapper (SI/dio pipes, log files).
-    LD_PRELOAD= $CP_LOGCOPY_NICE "$H/carplay_logcopy.sh" </dev/null >/dev/null 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
-fi
-# DEBUG-LOGCOPY-END
-
 # Only dio_manager receives the hook. The monitor and the renderer explicitly
 # clear LD_PRELOAD.
 export LD_PRELOAD="$H/libcarplay_hook.so"
