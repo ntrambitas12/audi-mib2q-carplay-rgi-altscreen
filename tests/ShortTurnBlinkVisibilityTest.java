@@ -334,7 +334,7 @@ public final class ShortTurnBlinkVisibilityTest {
             if (ms > 0) Thread.sleep(ms);
         }
 
-        static boolean inZone(int d) { return d > 0 && d <= 30; }
+        static boolean inZone(int d) { return d > 0 && d <= 76; }
 
         /** The invariant: a MANEUVER has been drawn since the last CLEAR, with the right geometry. */
         void settle(String where) throws Exception {
@@ -528,15 +528,15 @@ public final class ShortTurnBlinkVisibilityTest {
                 r.send("reroute-begin");
                 r.sleep(150);
                 r.m.routeState = 1;
-                r.m.dist = 60;
+                r.m.dist = 85;
                 if (newOnReturn) {
                     r.m.ver++;
                     r.m.variant = 1 - r.m.variant;
                 }
-                r.send("reroute-return outside zone @60");
+                r.send("reroute-return outside zone @85");
             } else {
-                r.m.dist = 60;
-                r.send("leave zone @60");
+                r.m.dist = 85;
+                r.send("leave zone @85");
             }
             r.settle("outside zone");
             r.sleep(300);

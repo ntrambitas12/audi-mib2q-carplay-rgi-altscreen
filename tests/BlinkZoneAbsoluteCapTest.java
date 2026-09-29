@@ -51,38 +51,37 @@ public final class BlinkZoneAbsoluteCapTest {
         isInBlinkZone.setAccessible(true);
 
         // --- Direct helper checks (the single consolidated source of truth) ---
+        // Blink only when 0 < distM and distM*100 < 7620 (76.2 m = 250 ft) and inside the zone.
+        // distM is whole meters, so the 76.2 m edge is tested at 76 (blink) and 77 (no blink).
+        int[][] cases = {   // dist, denominator, expected blink (1/0)
+            {29, 457, 1}, {29, 1600, 1}, {76, 457, 1}, {76, 1600, 1},   // below 250 ft: blink
+            {77, 457, 0}, {77, 1600, 0},                                  // 76.2 m and beyond: solid
+            {91, 457, 0}, {92, 457, 0}, {61, 457, 0}, {300, 1600, 0},     // 300 ft zone and far: no blink
+            {0, 100, 0}, {10, 0, 0}, {50, 40, 0}                          // invalid / outside zone
+        };
+        for (int i = 0; i < cases.length; i++) {
+            boolean got = ((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(cases[i][0]),
+                Integer.valueOf(cases[i][1]))).booleanValue();
+            check(got == (cases[i][2] == 1), "isInBlinkZone(" + cases[i][0] + ", " + cases[i][1] + ") expected " + cases[i][2]);
+        }
 
-        // blink off at 61 m on the city denominator (457 m): 61*100/457 == 13% (< 20%, so the percent
-        // rule alone would still blink) but 61 m is beyond the 30.48 m absolute cap.
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(61), Integer.valueOf(457))).booleanValue(),
-            "blink off at 61 m city denominator");
-
-        // blink off at 300 m on the highway denominator (1600 m): 300*100/1600 == 18.75% (< 20%,
-        // so the OLD percent-only rule would have blinked here) but 300 m is far outside the new
-        // absolute 30.48 m cap -- this is the regression case the fix targets.
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(300), Integer.valueOf(1600))).booleanValue(),
-            "blink off at 300 m highway denominator (absolute cap overrides percent rule)");
-
-        // blink on at 29 m (well under both the percent rule and the 30.48 m absolute cap).
-        check(((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(29), Integer.valueOf(1600))).booleanValue(),
-            "blink on at 29 m");
-        check(((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(29), Integer.valueOf(457))).booleanValue(),
-            "blink on at 29 m (city denominator too)");
-
-        // off at exactly 30.48 m+ : 30 m (3000 cm < 3048 cm) stays on; 31 m (3100 cm >= 3048 cm)
-        // is the first integer meter value at/above the 100 ft cap and must be off.
-        check(((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(30), Integer.valueOf(1600))).booleanValue(),
-            "blink still on at 30 m (below 30.48 m cap)");
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(31), Integer.valueOf(1600))).booleanValue(),
-            "blink off at 31 m (at/above 30.48 m cap)");
-
-        // Boundary/invalid inputs unchanged by the new cap.
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(0), Integer.valueOf(100))).booleanValue(),
-            "blink off at distM=0");
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(10), Integer.valueOf(0))).booleanValue(),
-            "blink off with zero denominator");
-        check(!((Boolean) isInBlinkZone.invoke(null, Integer.valueOf(50), Integer.valueOf(40))).booleanValue(),
-            "blink off when distM exceeds denominator");
+        // Shared bar/level mapping: 0 % remaining (arrow full) at <= 91.44 m, 100 % at the denominator,
+        // linear in between.  Whole meters: 91 m is full, 92 m is still 0 % (first percent needs ~95 m).
+        Method percent = BAPBridge.class.getDeclaredMethod("bargraphPercent", Integer.TYPE, Integer.TYPE);
+        percent.setAccessible(true);
+        int[][] pcts = { {1, 457, 0}, {91, 457, 0}, {92, 457, 0}, {457, 457, 100}, {1600, 1600, 100},
+                         {274, 457, 50} };   // (27400-9144)*100/(45700-9144) = 49 -> tolerance below
+        for (int i = 0; i < pcts.length; i++) {
+            int got = ((Integer) percent.invoke(null, Integer.valueOf(pcts[i][0]), Integer.valueOf(pcts[i][1]))).intValue();
+            if (pcts[i][2] == 50) check(got >= 48 && got <= 51, "midpoint percent " + got);
+            else check(got == pcts[i][2], "bargraphPercent(" + pcts[i][0] + ", " + pcts[i][1] + ") = " + got);
+        }
+        int prev = -1;
+        for (int d = 91; d <= 457; d++) {
+            int got = ((Integer) percent.invoke(null, Integer.valueOf(d), Integer.valueOf(457))).intValue();
+            check(got >= prev && got >= 0 && got <= 100, "percent monotone at " + d + " m");
+            prev = got;
+        }
 
         // --- Integration check: the actual sendActionBlinkTick call site respects the cap ---
         Output output = new Output();

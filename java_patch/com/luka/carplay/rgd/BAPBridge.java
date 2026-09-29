@@ -54,14 +54,13 @@ public class BAPBridge {
     private static final int HIGHWAY_PREPARE_THRESHOLD_M = 3000;
     private static final int HIGHWAY_STEP_THRESHOLD_M = 2000;
     private static final int BARGRAPH_ACTION_PERCENT_OF_PREPARE = 15;
-    private static final int BARGRAPH_BLINK_PERCENT = 20;
     private static final int ACTION_BLINK_INTERVAL_MS = 600;
-    /* Absolute blink lower bound: 30.48 m (100 ft), represented exactly in
-     * centimeters to avoid representing 30.48 as a float. Below this distance
-     * the percent-based blink zone (BARGRAPH_BLINK_PERCENT of the denominator)
-     * would otherwise still trigger flashing far too early on long denominators
-     * (e.g. ~1050 ft on the 1600 m highway denominator). */
-    private static final int BLINK_MAX_DISTANCE_CM = 3048;
+    /* Arrow fill thresholds, exact in centimeters: the arrow is completely full at 300 ft
+     * (91.44 m) and closer; the bargraph/level maps the remaining distance linearly from the
+     * denominator (100 % remaining) down to FULL_ARROW_CM (0 % remaining = full arrow).
+     * Blinking starts below 250 ft (76.2 m). */
+    private static final int FULL_ARROW_CM = 9144;
+    private static final int BLINK_BELOW_CM = 7620;
 
     /* BAP distance units defined by Audi's BAPDistanceFormatter. */
     private static final int BAP_DIST_UNIT_METERS = 0;
@@ -343,20 +342,22 @@ public class BAPBridge {
      * resetActionBlinkState().  No way for an orphan thread to send a
      * tick using a fresh generation's state.
      */
-    /**
-     * Single source of truth for "should the bargraph be flashing right now".
-     * Requires both the existing percent-of-denominator rule AND an absolute
-     * distance cap (BLINK_MAX_DISTANCE_CM) so long denominators (highway) can
-     * never trigger flashing hundreds of feet/meters out. Consolidates the
-     * four call sites that used to duplicate this check independently.
-     */
+    /** Single source of truth for "should the bargraph be flashing right now": inside the
+     * denominator and closer than 250 ft (76.2 m).  Between 76.2 m and 91.44 m the arrow is
+     * solid full. */
     private static boolean isInBlinkZone(int distM, int denomM) {
-        if (distM <= 0 || denomM <= 0 || distM > denomM) return false;
-        if (distM * 100 >= BLINK_MAX_DISTANCE_CM) return false;
-        int pct = (distM * 100) / denomM;
+        return distM > 0 && denomM > 0 && distM <= denomM && distM * 100 < BLINK_BELOW_CM;
+    }
+
+    /** Remaining-distance percent (0..100) shared by the cluster bar (FctID 18) and the renderer
+     * level: 0 at <= FULL_ARROW_CM (arrow full), 100 at the denominator, linear in between. */
+    static int bargraphPercent(int distM, int denomM) {
+        int denomCm = denomM * 100, distCm = distM * 100;
+        if (denomCm <= FULL_ARROW_CM) return distCm <= FULL_ARROW_CM ? 0 : 100;
+        int pct = ((distCm - FULL_ARROW_CM) * 100) / (denomCm - FULL_ARROW_CM);
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
-        return pct < BARGRAPH_BLINK_PERCENT;
+        return pct;
     }
 
     private boolean sendActionBlinkTick(int myGen) {
@@ -1539,9 +1540,7 @@ public class BAPBridge {
                     int bargraph = 0;
                     if (inAction) {
                         bargraphOn = true;
-                        bargraph = (distM * 100) / bargraphDenominatorM;
-                        if (bargraph < 0) bargraph = 0;
-                        if (bargraph > 100) bargraph = 100;
+                        bargraph = bargraphPercent(distM, bargraphDenominatorM);
                         if (isInBlinkZone(distM, bargraphDenominatorM)) {
                             /* Blink zone: the 600 ms worker sends FctID 18 and
                              * maneuver_render together from one state snapshot. */
@@ -2740,9 +2739,7 @@ public class BAPBridge {
             int progressMode = 0;
             int distM = s.distManeuverM;
             if (bargraphDenominatorM > 0 && distM > 0 && distM <= bargraphDenominatorM) {
-                int pct = (distM * 100) / bargraphDenominatorM;
-                if (pct < 0) pct = 0;
-                if (pct > 100) pct = 100;
+                int pct = bargraphPercent(distM, bargraphDenominatorM);
                 remainingLevel = (pct * 16) / 100;
                 progressMode = 1;
             }
@@ -2817,9 +2814,7 @@ public class BAPBridge {
         int progressMode = 0;
         int distM = s.distManeuverM;
         if (bargraphDenominatorM > 0 && distM > 0 && distM <= bargraphDenominatorM) {
-            int pct = (distM * 100) / bargraphDenominatorM;
-            if (pct < 0) pct = 0;
-            if (pct > 100) pct = 100;
+            int pct = bargraphPercent(distM, bargraphDenominatorM);
             remainingLevel = (pct * 16) / 100;
             if (isInBlinkZone(distM, bargraphDenominatorM)) {
                 /* sendActionBlinkTick() supplies the same explicit phase to HUD
