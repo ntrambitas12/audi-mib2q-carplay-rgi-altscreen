@@ -242,7 +242,9 @@ public final class SteeringWheelInputModule implements Module {
             armCollapsedSelect(keyState);
 
             if (keyState == KST_PRESSED) {
-                if (!isConfirmedMapTab()) return;
+                boolean mapTab = isConfirmedMapTab();
+                Log.i(TAG, "MFW left roller PRESSED (board=" + keyboardId + " mapTab=" + mapTab + ")");
+                if (!mapTab) return;
                 synchronized (SteeringWheelInputModule.this) {
                     if (currentLongPressTask != null) {
                         currentLongPressTask.cancel();
@@ -290,6 +292,7 @@ public final class SteeringWheelInputModule implements Module {
                     wasHandled = longPressHandled;
                     longPressHandled = false;
                 }
+                Log.i(TAG, "MFW left roller RELEASED (board=" + keyboardId + " wasLongPress=" + wasHandled + ")");
                 if (!wasHandled) {
                     // Short click (< LONG_PRESS_DURATION_MS): trigger route-info ETA / Street toggle
                     boolean mapTab = isConfirmedMapTab();

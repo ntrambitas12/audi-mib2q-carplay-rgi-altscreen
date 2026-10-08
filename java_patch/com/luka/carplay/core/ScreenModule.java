@@ -111,6 +111,7 @@ public final class ScreenModule implements Module {
         synchronized (LOCK) {
             rebindPending = true;
             rebindReason = reason != null ? reason : "";
+            Log.i(TAG, "rebindPending set (reason=" + rebindReason + ")");
             listener = rebindListener;
             LOCK.notifyAll();
         }
@@ -141,6 +142,7 @@ public final class ScreenModule implements Module {
             Log.i(TAG, "long press ignored: CarPlay session not connected");
             return;
         }
+        Log.i(TAG, "steering wheel long-press received");
         cycleMapMode();
     }
 
@@ -183,6 +185,7 @@ public final class ScreenModule implements Module {
                 if (desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER) {
                     rebindPending = true;
                     rebindReason = "map-mode-cycle";
+                    Log.i(TAG, "rebindPending set (reason=" + rebindReason + ")");
                 }
                 currentDesired = desiredCtx;
                 isOwned = clusterActive;
@@ -194,13 +197,11 @@ public final class ScreenModule implements Module {
     }
 
     private static void recomputeDesiredCtxLocked() {
+        int prev = desiredCtx;
         navActive = (routeActive && presentationActive) || navHidePending;
         if (!connected) {
             desiredCtx = CTX_STOCK_CLUSTER;
-            return;
-        }
-
-        if (activeMapMode == MAP_MODE_CARPLAY) {
+        } else if (activeMapMode == MAP_MODE_CARPLAY) {
             // In CarPlay mode: take CTX_CLUSTER continuously when the stream is ready (cruising & navigating)
             // or during active turn maneuvers. If stream is not ready, safely fall back to stock cluster (74).
             // streamReadyCached is refreshed only by the worker poll (file I/O must never run under LOCK).
@@ -209,6 +210,17 @@ public final class ScreenModule implements Module {
         } else {
             // In Audi backup mode: cruising stays on stock cluster 74; turn approaches take CTX_CLUSTER (80)
             desiredCtx = navActive ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        }
+        if (desiredCtx != prev) {
+            String why;
+            if (!connected) {
+                why = "session disconnected";
+            } else if (activeMapMode == MAP_MODE_CARPLAY) {
+                why = "carplay-mode (streamReady=" + streamReadyCached + " navActive=" + navActive + ")";
+            } else {
+                why = "audi-backup-mode (navActive=" + navActive + ")";
+            }
+            Log.i(TAG, "desiredCtx changed " + prev + " -> " + desiredCtx + " (why=" + why + ")");
         }
     }
 
@@ -391,6 +403,7 @@ public final class ScreenModule implements Module {
         boolean small = (mode == VIEWAREA_SMALLSCREEN);
         if (smallScreenViewArea == small) return;
         smallScreenViewArea = small;
+        Log.i(TAG, "view-area changed: mode=" + mode + " (" + (small ? "SMALLSCREEN" : "FULLSCREEN") + ")");
         publishHmiState(small ? 1 : 0, small ? "SPORT" : "CLASSIC", "view-area-change");
         ViewAreaModeListener listener = viewAreaModeListener;
         if (listener != null) {
@@ -422,6 +435,7 @@ public final class ScreenModule implements Module {
     /** Raw DSI key 40 (left steering-wheel roller press).  SteeringWheelInputModule already gates
      *  this callback to the confirmed VC map tab; the toggle is meaningful only with active RGI. */
     public static void onSteeringWheelOkPressed() {
+        Log.i(TAG, "steering wheel short-press received (connected=" + isConnected() + " rgdActive=" + isRgdActive() + ")");
         if (!isConnected() || !isRgdActive()) return;
         InfoModeListener listener = infoModeListener;
         if (listener == null) return;
@@ -560,6 +574,7 @@ public final class ScreenModule implements Module {
                 && activeMapMode == MAP_MODE_CARPLAY) {
             rebindPending = true;
             rebindReason = "stream-ready-change";
+            Log.i(TAG, "rebindPending set (reason=" + rebindReason + ")");
         }
     }
 
@@ -621,6 +636,7 @@ public final class ScreenModule implements Module {
                     continue;
                 }
                 if (actual != target) {
+                    Log.i(TAG, "reconcile correction actual=" + actual + " desired=" + target);
                     boolean retry = false;
                     synchronized (LOCK) {
                         if (dm == d && desiredCtx == target && currentCtx == target) {
@@ -734,46 +750,23 @@ public final class ScreenModule implements Module {
     private static final Object STATE_FILE_LOCK = new Object();
     private static final String CLUSTER_STATE_FILE = "/tmp/mmi-mirror-cluster-ownership.state";
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
-    private static final String STREAM_READY_FILE = "/tmp/altscreen-private111.stream-ready";
-
-    /* Written by the sidecar only after its first frame is presented; start_vehicle.sh deletes it on
-     * every sidecar start (ALT111_JAVA_BASE_READY_FILE), so a stale stream-ready marker cannot pass. */
-    private static final String BASE_READY_FILE = "/tmp/mmi-mirror-basevideo.ready";
-    private static final int MIN_STREAM_FRAMES = 2;
+    private static final String MIRROR_ACTIVE_FILE = "/tmp/mmi-mirror-active";
 
     private static boolean clusterRenameWarned = false;   /* guarded by STATE_FILE_LOCK */
     private static boolean hmiRenameWarned = false;       /* guarded by STATE_FILE_LOCK */
 
     /**
-     * Checks whether the native AltScreen video stream supervisor has confirmed decoded frame readiness:
-     * marker has ready=1 (and frames>=2 when reported) AND the sidecar's first-present file exists.
+     * Checks whether the native AltScreen video stream supervisor has confirmed demand readiness:
+     * returns true iff /tmp/mmi-mirror-active exists (created by stream_supervisor.sh
+     * once the private111 stream marker is valid).
      * Does file I/O: never call while holding LOCK.
      */
     public static boolean isAltScreenStreamReady() {
         try {
-            java.io.File file = new java.io.File(STREAM_READY_FILE);
-            if (!file.exists() || file.length() == 0) return false;
-            if (!new java.io.File(BASE_READY_FILE).exists()) return false;
-            boolean ready = false;
-            int frames = -1;
-            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(file));
-            try {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    line = line.trim();
-                    if (line.equals("ready=1")) {
-                        ready = true;
-                    } else if (line.startsWith("frames=")) {
-                        try { frames = Integer.parseInt(line.substring(7).trim()); }
-                        catch (NumberFormatException nfe) { frames = -1; }
-                    }
-                }
-            } finally {
-                br.close();
-            }
-            return ready && (frames < 0 || frames >= MIN_STREAM_FRAMES);
-        } catch (Throwable ignored) {}
-        return false;
+            return new java.io.File(MIRROR_ACTIVE_FILE).exists();
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static void publishClusterOwnershipState(int ctx, boolean owned, boolean sessionActive) {
