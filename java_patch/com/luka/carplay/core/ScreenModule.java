@@ -196,6 +196,20 @@ public final class ScreenModule implements Module {
         publishClusterOwnershipState(currentDesired, isOwned, session);
     }
 
+    /**
+     * Called when CarPlay session deactivates: resets active map mode to CarPlay so the NEXT
+     * phone connection starts on the CarPlay second screen.
+     * Lock order: CYCLE_LOCK -> LOCK. Never calls into DisplayManager while holding LOCK.
+     */
+    public static void onCarPlayDisconnected() {
+        synchronized (CYCLE_LOCK) {
+            synchronized (LOCK) {
+                activeMapMode = MAP_MODE_CARPLAY;
+            }
+        }
+        Log.i(TAG, "CarPlay disconnected: reset activeMapMode -> CARPLAY");
+    }
+
     private static void recomputeDesiredCtxLocked() {
         int prev = desiredCtx;
         navActive = (routeActive && presentationActive) || navHidePending;
@@ -445,6 +459,7 @@ public final class ScreenModule implements Module {
     public String name() { return "screen"; }
 
     public boolean start(FrameworkRef fw) {
+        Log.i(TAG, "start() called (activeMapMode=" + activeMapMode + ")");
         if (fw == null || !fw.isReady() || fw.framework() == null) return false;
         if (!isPlatformSupported(fw)) {
             platformSupported = false;
@@ -474,7 +489,6 @@ public final class ScreenModule implements Module {
              * re-applies the desired ctx to the new one.  (In practice the same object each session.) */
             if (dm != d) { dm = d; currentCtx = -1; }
             connected = true;
-            activeMapMode = MAP_MODE_CARPLAY;
             routeActive = false;
             presentationActive = false;
             navHidePending = false;

@@ -193,6 +193,8 @@ public final class CarPlayApp {
                     catch (Throwable t) { Log.w(TAG, "OPS presentation cleanup: " + t); }
                     try { com.luka.carplay.cluster.WheelZoomBridge.logCarPlayLifecycle(false); }
                     catch (Throwable t) {}
+                    try { ScreenModule.onCarPlayDisconnected(); }
+                    catch (Throwable t) {}
                     stopModules();
                     return;
                 }
