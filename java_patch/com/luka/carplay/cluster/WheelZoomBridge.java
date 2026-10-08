@@ -59,12 +59,7 @@ public final class WheelZoomBridge {
             return;
         }
 
-        int steps = Math.abs(delta);
-        if (steps > MAX_STEPS_PER_CALLBACK) {
-            diag("WHEEL_ZOOM_INPUT magnification=" + magnification + " delta=" + delta 
-                + " action=IGNORED reason=delta_outlier max_steps=" + MAX_STEPS_PER_CALLBACK);
-            return;
-        }
+        int steps = Math.min(Math.abs(delta), MAX_STEPS_PER_CALLBACK);
 
         int direction = (delta < 0) ? 0 : 1; // 0 = ZOOM_IN, 1 = ZOOM_OUT
         String actionStr = (direction == 0) ? "ZOOM_IN" : "ZOOM_OUT";

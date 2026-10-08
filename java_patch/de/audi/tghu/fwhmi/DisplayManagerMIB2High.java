@@ -60,8 +60,7 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
         return i;
     }
 
-    protected void defineContexts() {
-        activeInstance = this;
+    protected synchronized void defineContexts() {
         if (this.framework.getKombiType() == KOMBI_TYPE_G24) {
             this.dc = new DisplayContext[DC_SIZE_G24];
         } else {
@@ -194,6 +193,7 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
             + " sysConst(541)=" + this.framework.getSysConst(SYSCONST_KOMBI_VARIANT)
             + " carplayCtx=" + (this.dc[CTX_CARPLAY_NAV] != null)
             + " baseMapDisplayable=" + currentCarPlayBaseDisplayable);
+        activeInstance = this;
     }
 
     /**

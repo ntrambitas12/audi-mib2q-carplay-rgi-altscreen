@@ -145,43 +145,36 @@ public final class ScreenModule implements Module {
     }
 
     public static void cycleMapMode() {
+        int nextMode;
+        int nextDisplayable;
         synchronized (LOCK) {
-            if (activeMapMode == MAP_MODE_CARPLAY) {
-                activeMapMode = MAP_MODE_AUDI_BACKUP;
-                Log.i(TAG, "Map mode cycled -> AUDI_BACKUP (stock Audi map)");
-                de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(33);
-            } else {
-                activeMapMode = MAP_MODE_CARPLAY;
-                Log.i(TAG, "Map mode cycled -> CARPLAY (default)");
-                de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(3);
-            }
+            nextMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
+            nextDisplayable = (nextMode == MAP_MODE_CARPLAY) ? 3 : 33;
+        }
+
+        // Swap base displayable outside ScreenModule.LOCK to avoid holding LOCK while acquiring DM monitor
+        de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(nextDisplayable);
+
+        int currentDesired;
+        boolean isOwned;
+        synchronized (LOCK) {
+            activeMapMode = nextMode;
+            Log.i(TAG, "Map mode cycled -> " + (nextMode == MAP_MODE_CARPLAY ? "CARPLAY (default)" : "AUDI_BACKUP (stock Audi map)"));
             recomputeDesiredCtxLocked();
-            rebindPending = true;
-            rebindReason = "map-mode-cycle";
+            if (desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER) {
+                rebindPending = true;
+                rebindReason = "map-mode-cycle";
+            }
+            currentDesired = desiredCtx;
+            isOwned = clusterActive;
             LOCK.notifyAll();
         }
-        publishClusterOwnershipState(desiredCtx, clusterActive);
+        publishClusterOwnershipState(currentDesired, isOwned);
     }
 
     private static void recomputeDesiredCtxLocked() {
-        if (!connected) {
-            navActive = false;
-            desiredCtx = CTX_STOCK_CLUSTER;
-            return;
-        }
-
-        if (activeMapMode == MAP_MODE_CARPLAY) {
-            // CarPlay maps load by default!
-            // When connected, cluster holds CTX_CLUSTER (80) with displayable 3 (CarPlay AltScreen map)
-            navActive = true;
-            desiredCtx = CTX_CLUSTER;
-        } else {
-            // Audi stock map backup mode:
-            // Cruising drops to CTX_STOCK_CLUSTER (74, Audi map 33).
-            // Turn maneuvers activate CTX_CLUSTER (80, Audi map 33 + maneuver 98 overlay).
-            navActive = (routeActive && presentationActive) || navHidePending;
-            desiredCtx = navActive ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
-        }
+        navActive = (routeActive && presentationActive) || navHidePending;
+        desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
     }
 
     /** Recompute desiredCtx from connected/routeActive/presentationActive and wake the worker. Caller must NOT hold LOCK. */
@@ -432,6 +425,7 @@ public final class ScreenModule implements Module {
              * re-applies the desired ctx to the new one.  (In practice the same object each session.) */
             if (dm != d) { dm = d; currentCtx = -1; }
             connected = true;
+            activeMapMode = MAP_MODE_CARPLAY;
             routeActive = false;
             presentationActive = false;
             navHidePending = false;
@@ -439,6 +433,7 @@ public final class ScreenModule implements Module {
             clusterActive = false;
             recomputeDesiredCtxLocked();
         }
+        de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(3);
         synchronized (LOCK) {
             /* Create the single persistent worker once; recreate only if it never started or died.
              * Assign the field ONLY after start() succeeds so a throw leaves worker==null for retry. */
@@ -618,38 +613,79 @@ public final class ScreenModule implements Module {
         }
     }
 
-    private static void publishClusterOwnershipState(int ctx, boolean owned) {
+    private static final Object STATE_FILE_LOCK = new Object();
+    private static final String CLUSTER_STATE_FILE = "/tmp/mmi-mirror-cluster-ownership.state";
+    private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
+    private static final String STREAM_READY_FILE = "/tmp/altscreen-private111.stream-ready";
+
+    /**
+     * Checks whether the native AltScreen video stream supervisor has confirmed decoded frame readiness.
+     */
+    public static boolean isAltScreenStreamReady() {
         try {
-            java.io.File f = new java.io.File("/tmp/mmi-mirror-cluster-ownership.state");
-            java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
-            StringBuffer sb = new StringBuffer();
-            sb.append("version=1\n")
-              .append("carplay_session=").append(connected ? "1" : "0").append("\n")
-              .append("cluster_owned=").append(owned ? "1" : "0").append("\n")
-              .append("ownership_intent=").append(connected ? "1" : "0").append("\n")
-              .append("composite_applied=").append(owned ? "1" : "0").append("\n")
-              .append("context=").append(ctx).append("\n")
-              .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n");
-            fos.write(sb.toString().getBytes("UTF-8"));
-            fos.flush();
-            fos.close();
+            java.io.File file = new java.io.File(STREAM_READY_FILE);
+            if (!file.exists() || file.length() == 0) return false;
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(file));
+            try {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (line.startsWith("ready=1")) return true;
+                }
+            } finally {
+                br.close();
+            }
         } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static void publishClusterOwnershipState(int ctx, boolean owned) {
+        synchronized (STATE_FILE_LOCK) {
+            try {
+                java.io.File target = new java.io.File(CLUSTER_STATE_FILE);
+                java.io.File tmp = new java.io.File(CLUSTER_STATE_FILE + ".tmp");
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp);
+                StringBuffer sb = new StringBuffer();
+                sb.append("version=1\n")
+                  .append("carplay_session=").append(connected ? "1" : "0").append("\n")
+                  .append("cluster_owned=").append(owned ? "1" : "0").append("\n")
+                  .append("ownership_intent=").append(connected ? "1" : "0").append("\n")
+                  .append("composite_applied=").append(owned ? "1" : "0").append("\n")
+                  .append("context=").append(ctx).append("\n")
+                  .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n");
+                byte[] bytes = sb.toString().getBytes("UTF-8");
+                fos.write(bytes);
+                fos.flush();
+                fos.close();
+                if (!tmp.renameTo(target)) {
+                    target.delete();
+                    tmp.renameTo(target);
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 
     private static void publishHmiState(int layout, String layoutName, String reason) {
-        try {
-            java.io.File f = new java.io.File("/tmp/mmi-mirror-hmi.state");
-            java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
-            StringBuffer sb = new StringBuffer();
-            sb.append("layout=").append(layout).append("\n")
-              .append("layout_name=").append(layoutName).append("\n")
-              .append("small_stage_dx=0\n")
-              .append("small_stage_dy=0\n")
-              .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n")
-              .append("reason=").append(reason).append("\n");
-            fos.write(sb.toString().getBytes("UTF-8"));
-            fos.flush();
-            fos.close();
-        } catch (Throwable ignored) {}
+        synchronized (STATE_FILE_LOCK) {
+            try {
+                java.io.File target = new java.io.File(HMI_STATE_FILE);
+                java.io.File tmp = new java.io.File(HMI_STATE_FILE + ".tmp");
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp);
+                StringBuffer sb = new StringBuffer();
+                sb.append("layout=").append(layout).append("\n")
+                  .append("layout_name=").append(layoutName).append("\n")
+                  .append("small_stage_dx=0\n")
+                  .append("small_stage_dy=0\n")
+                  .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n")
+                  .append("reason=").append(reason).append("\n");
+                byte[] bytes = sb.toString().getBytes("UTF-8");
+                fos.write(bytes);
+                fos.flush();
+                fos.close();
+                if (!tmp.renameTo(target)) {
+                    target.delete();
+                    tmp.renameTo(target);
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 }

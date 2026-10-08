@@ -47,7 +47,7 @@ public final class SteeringWheelInputModule implements Module {
     private static long pendingPressUntil;
     private static long pendingReleaseUntil;
 
-    private final java.util.Timer longPressTimer = new java.util.Timer(true);
+    private java.util.Timer longPressTimer;
     private java.util.TimerTask currentLongPressTask;
     private boolean longPressHandled;
 
@@ -109,6 +109,11 @@ public final class SteeringWheelInputModule implements Module {
             listenerRegistration = registration;
             running = true;
             clearPendingSelects();
+            synchronized (this) {
+                if (longPressTimer == null) {
+                    longPressTimer = new java.util.Timer(true);
+                }
+            }
             Log.i(TAG, "raw MFW OK listener ready (key=40 mapContext="
                 + (manager == null ? "unavailable, using CarPlay RGI state" : "20") + ")");
             return true;
@@ -142,6 +147,10 @@ public final class SteeringWheelInputModule implements Module {
             if (currentLongPressTask != null) {
                 currentLongPressTask.cancel();
                 currentLongPressTask = null;
+            }
+            if (longPressTimer != null) {
+                try { longPressTimer.cancel(); } catch (Throwable ignored) {}
+                longPressTimer = null;
             }
             longPressHandled = false;
         }
@@ -233,25 +242,37 @@ public final class SteeringWheelInputModule implements Module {
             armCollapsedSelect(keyState);
 
             if (keyState == KST_PRESSED) {
-                final boolean mapTab = isConfirmedMapTab();
+                if (!isConfirmedMapTab()) return;
                 synchronized (SteeringWheelInputModule.this) {
                     if (currentLongPressTask != null) {
                         currentLongPressTask.cancel();
                         currentLongPressTask = null;
                     }
                     longPressHandled = false;
-                    currentLongPressTask = new java.util.TimerTask() {
+                    final java.util.TimerTask task = new java.util.TimerTask() {
                         public void run() {
-                            synchronized (SteeringWheelInputModule.this) {
-                                if (!running) return;
-                                longPressHandled = true;
+                            try {
+                                synchronized (SteeringWheelInputModule.this) {
+                                    if (currentLongPressTask != this || !running) return;
+                                    longPressHandled = true;
+                                }
+                                if (!isConfirmedMapTab()) {
+                                    Log.i(TAG, "long press ignored: not on confirmed map tab");
+                                    return;
+                                }
+                                Log.i(TAG, "MFW left roller long press triggered (" + LONG_PRESS_DURATION_MS + " ms)");
+                                ScreenModule.onSteeringWheelLongPressed();
+                            } catch (Throwable t) {
+                                Log.w(TAG, "unhandled exception in long press task: " + t);
                             }
-                            Log.i(TAG, "MFW left roller long press triggered (" + LONG_PRESS_DURATION_MS + " ms)");
-                            ScreenModule.onSteeringWheelLongPressed();
                         }
                     };
+                    currentLongPressTask = task;
                     try {
-                        longPressTimer.schedule(currentLongPressTask, LONG_PRESS_DURATION_MS);
+                        if (longPressTimer == null) {
+                            longPressTimer = new java.util.Timer(true);
+                        }
+                        longPressTimer.schedule(task, LONG_PRESS_DURATION_MS);
                     } catch (Throwable t) {
                         Log.w(TAG, "failed to schedule long press timer: " + t);
                     }
