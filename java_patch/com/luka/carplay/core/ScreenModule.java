@@ -145,21 +145,14 @@ public final class ScreenModule implements Module {
     }
 
     public static void cycleMapMode() {
-        int nextMode;
         int nextDisplayable;
-        synchronized (LOCK) {
-            nextMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
-            nextDisplayable = (nextMode == MAP_MODE_CARPLAY) ? 3 : 33;
-        }
-
-        // Swap base displayable outside ScreenModule.LOCK to avoid holding LOCK while acquiring DM monitor
-        de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(nextDisplayable);
-
         int currentDesired;
         boolean isOwned;
+        boolean session;
         synchronized (LOCK) {
-            activeMapMode = nextMode;
-            Log.i(TAG, "Map mode cycled -> " + (nextMode == MAP_MODE_CARPLAY ? "CARPLAY (default)" : "AUDI_BACKUP (stock Audi map)"));
+            activeMapMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
+            nextDisplayable = (activeMapMode == MAP_MODE_CARPLAY) ? 3 : 33;
+            Log.i(TAG, "Map mode cycled -> " + (activeMapMode == MAP_MODE_CARPLAY ? "CARPLAY (default)" : "AUDI_BACKUP (stock Audi map)"));
             recomputeDesiredCtxLocked();
             if (desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER) {
                 rebindPending = true;
@@ -167,14 +160,31 @@ public final class ScreenModule implements Module {
             }
             currentDesired = desiredCtx;
             isOwned = clusterActive;
+            session = connected;
             LOCK.notifyAll();
         }
-        publishClusterOwnershipState(currentDesired, isOwned);
+
+        // Swap base displayable outside ScreenModule.LOCK to avoid holding LOCK while acquiring DM monitor
+        de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(nextDisplayable);
+        publishClusterOwnershipState(currentDesired, isOwned, session);
     }
 
     private static void recomputeDesiredCtxLocked() {
         navActive = (routeActive && presentationActive) || navHidePending;
-        desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        if (!connected) {
+            desiredCtx = CTX_STOCK_CLUSTER;
+            return;
+        }
+
+        if (activeMapMode == MAP_MODE_CARPLAY) {
+            // In CarPlay mode: take CTX_CLUSTER continuously when the stream is ready (cruising & navigating)
+            // or during active turn maneuvers. If stream is not ready, safely fall back to stock cluster (74).
+            boolean streamReady = isAltScreenStreamReady();
+            desiredCtx = (streamReady || navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        } else {
+            // In Audi backup mode: cruising stays on stock cluster 74; turn approaches take CTX_CLUSTER (80)
+            desiredCtx = navActive ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        }
     }
 
     /** Recompute desiredCtx from connected/routeActive/presentationActive and wake the worker. Caller must NOT hold LOCK. */
@@ -465,7 +475,7 @@ public final class ScreenModule implements Module {
             rebindReason = "";
             clusterActive = false;
         }
-        publishClusterOwnershipState(CTX_STOCK_CLUSTER, false);
+        publishClusterOwnershipState(CTX_STOCK_CLUSTER, false, false);
         republish();
     }
 
@@ -488,10 +498,21 @@ public final class ScreenModule implements Module {
                     try {
                         if (desiredCtx == CTX_CLUSTER)
                             LOCK.wait(CONTEXT_RECONCILE_MS);
+                        else if (connected && activeMapMode == MAP_MODE_CARPLAY)
+                            LOCK.wait(500L);
                         else
                             LOCK.wait();
                     } catch (InterruptedException e) { /* persistent worker */ }
-                    if (dm == null || desiredCtx != currentCtx) continue;
+                    if (dm == null) continue;
+                    if (connected && activeMapMode == MAP_MODE_CARPLAY) {
+                        int prevDesired = desiredCtx;
+                        recomputeDesiredCtxLocked();
+                        if (desiredCtx != prevDesired) {
+                            Log.i(TAG, "CarPlay stream readiness transitioned desiredCtx " + prevDesired + " -> " + desiredCtx);
+                            continue;
+                        }
+                    }
+                    if (desiredCtx != currentCtx) continue;
                     if (desiredCtx == CTX_CLUSTER && rebindPending) {
                         rebindPending = false;
                         Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
@@ -598,15 +619,19 @@ public final class ScreenModule implements Module {
                 }
                 com.luka.carplay.cluster.ClusterLayerController.reapply();
             }
-            publishClusterOwnershipState(ctx, clusterActive);
+            boolean session;
+            synchronized (LOCK) { session = connected; }
+            publishClusterOwnershipState(ctx, clusterActive, session);
             Log.i(TAG, "cluster -> ctx " + ctx + " (active=" + clusterActive + ")");
         } catch (Throwable t) {
             Log.w(TAG, "switch(" + ctx + ") failed: " + t);
+            boolean session;
             synchronized (LOCK) {
                 currentCtx = -1;
                 clusterActive = false;
+                session = connected;
             }
-            publishClusterOwnershipState(CTX_STOCK_CLUSTER, false);
+            publishClusterOwnershipState(CTX_STOCK_CLUSTER, false, session);
             /* Throttle the retry: the bounce write and the stock path have no settle sleep, so a
              * persistently-throwing switchContext would otherwise hot-spin (busy loop + log flood). */
             try { Thread.sleep(BOUNCE_SLEEP_MS); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
@@ -638,7 +663,7 @@ public final class ScreenModule implements Module {
         return false;
     }
 
-    private static void publishClusterOwnershipState(int ctx, boolean owned) {
+    private static void publishClusterOwnershipState(int ctx, boolean owned, boolean sessionActive) {
         synchronized (STATE_FILE_LOCK) {
             try {
                 java.io.File target = new java.io.File(CLUSTER_STATE_FILE);
@@ -646,20 +671,17 @@ public final class ScreenModule implements Module {
                 java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp);
                 StringBuffer sb = new StringBuffer();
                 sb.append("version=1\n")
-                  .append("carplay_session=").append(connected ? "1" : "0").append("\n")
-                  .append("cluster_owned=").append(owned ? "1" : "0").append("\n")
-                  .append("ownership_intent=").append(connected ? "1" : "0").append("\n")
-                  .append("composite_applied=").append(owned ? "1" : "0").append("\n")
+                  .append("carplay_session=").append(sessionActive ? "1" : "0").append("\n")
+                  .append("cluster_owned=").append((sessionActive && owned) ? "1" : "0").append("\n")
+                  .append("ownership_intent=").append(sessionActive ? "1" : "0").append("\n")
+                  .append("composite_applied=").append((sessionActive && owned) ? "1" : "0").append("\n")
                   .append("context=").append(ctx).append("\n")
                   .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n");
                 byte[] bytes = sb.toString().getBytes("UTF-8");
                 fos.write(bytes);
                 fos.flush();
                 fos.close();
-                if (!tmp.renameTo(target)) {
-                    target.delete();
-                    tmp.renameTo(target);
-                }
+                tmp.renameTo(target);
             } catch (Throwable ignored) {}
         }
     }
@@ -681,10 +703,7 @@ public final class ScreenModule implements Module {
                 fos.write(bytes);
                 fos.flush();
                 fos.close();
-                if (!tmp.renameTo(target)) {
-                    target.delete();
-                    tmp.renameTo(target);
-                }
+                tmp.renameTo(target);
             } catch (Throwable ignored) {}
         }
     }
