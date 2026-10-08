@@ -84,7 +84,8 @@ run cores_ls.txt ls -la /mnt/ota/system/core
 
 # ---- logs and captures from /tmp (never the shared-memory objects also living there) ----
 mkdir "$OUT/tmp"
-for f in "$SRC"/*.log "$SRC"/*.log.* "$SRC"/carplay_* "$SRC"/*.pid; do
+for f in "$SRC"/*.log "$SRC"/*.log.* "$SRC"/carplay_* "$SRC"/*.pid \
+         "$SRC"/altscreen* "$SRC"/mmi-mirror-* "$SRC"/*.state; do
     [ -f "$f" ] || continue
     cp "$f" "$OUT/tmp/" 2>/dev/null || echo "copy failed: $f" >> "$OUT/info.txt"
 done
