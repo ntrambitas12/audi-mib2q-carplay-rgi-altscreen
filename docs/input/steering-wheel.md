@@ -11,21 +11,21 @@ sources:
 
 # Steering-wheel roller - zoom & route-info toggle
 
-The left MFW roller has two axes: **rotation** and **press**. On this branch the cluster shows the
-stock native map, so rotation is left to stock; only the press is repurposed.
+The left MFW roller has two distinct axes: **rotation** (scroll) and **press** (click).
 
 ## 📋 Context
 
-> MFW roller -> **rotation** = stock native-map zoom - **press** = cluster route-info toggle ->
+> MFW roller -> **rotation** = CarPlay AltScreen map zoom (via `WheelZoomBridge`) - **press** = cluster route-info toggle (Next Street ↔ ETA / trip summary) ->
 > [bap-fctids](../rgd/bap-fctids.md) FctID 19 -> [rgd-activation](../rgd/rgd-activation.md).
 
-## 🔄 Rotation (zoom) -> stock
+## 🔄 Rotation (scroll) -> CarPlay AltScreen Zoom
 
-The roller sends rotation as Navigation-BAP `MapScale.steps`. Since the cluster renders the stock
-native map (no CarPlay video plane to zoom), `ScreenCombiBAPListener` does not override `setMapScale`:
-the step falls through to stock, which zooms the native cluster map exactly as stock does. (The
-listener only observes FctID 44 visibility and FctID 54 stage for the KDK layers - see
-[kdk-geometry](../cluster/kdk-geometry.md).)
+The roller rotation is delivered to `ClusterService.onMagnificationChanged(int i)`.
+On the `altScreen` branch:
+1. `WheelZoomBridge.onMagnificationChanged(i)` computes the delta steps and direction (`0` = Zoom In, `1` = Zoom Out).
+2. When CarPlay owns the cluster (Context 80), it appends formatted events to `/tmp/mmi-mirror-wheel-zoom.events`.
+3. `libcarplay_altscreen.so` polls this event queue and dispatches native `changeMapZoomLevel` commands to Apple CarPlay over the secondary screen control plane.
+4. When cruising or outside Context 80, the zoom steps fall through to stock.
 
 ## ⚙️ Press (OK) -> route-info toggle
 

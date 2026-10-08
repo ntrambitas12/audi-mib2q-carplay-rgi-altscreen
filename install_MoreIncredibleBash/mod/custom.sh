@@ -35,12 +35,17 @@ ACTION=${1:-install}
 
 HOOKS=/mnt/app/root/hooks
 JARS=/mnt/app/eso/hmi/lsd/jars
+ALTS_LIB=/mnt/app/root/carplay-altscreen/lib
+ALTS_BIN=/mnt/app/root/carplay-altscreen/bin/mirror
+
 # Flat release asset -> on-unit path. Anything else in carplay/ is ignored.
 flat_dest() {
     case $1 in
         libcarplay_hook.so|maneuver_render|flag_atlas.rgba) echo "$HOOKS/$1" ;;
         carplay_startup.sh|carplay_monitor.sh|carplay_processes.sh|carplay_cleanup.sh) echo "$HOOKS/$1" ;;
         carplay_hook.jar) echo "$JARS/$1" ;;
+        libcarplay_altscreen.so) echo "$ALTS_LIB/$1" ;;
+        carplay-alt111-mirror-display|start_vehicle.sh|stop_vehicle.sh|stream_supervisor.sh) echo "$ALTS_BIN/$1" ;;
         *) return 1 ;;
     esac
 }
@@ -51,7 +56,7 @@ DIO=/mnt/system/etc/eso/production/dio_manager.json
 mode_for() {
     case $1 in
         *.so|*.so.*)       echo 755 ;;
-        */maneuver_render) echo 755 ;;
+        */maneuver_render|*/carplay-alt111-mirror-display) echo 755 ;;
         *.sh)              echo 755 ;;
         *)                 echo 644 ;;  # atlas, .jar
     esac
@@ -65,6 +70,9 @@ backup_once() { [ -e "$2" ] || cp -p "$1" "$2" || { echo "FAILED backup $2"; ret
 # release would pair a new carplay_startup.sh with an old monitor, so it stops here.
 FLAT_ASSETS="libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.sh
 carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
+
+ALTS_ASSETS="libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh
+stop_vehicle.sh stream_supervisor.sh"
 
 # Payload as "source|destination" lines into $1.  Flat assets are checked by name,
 # never by walking the card.  The optional root/ tree needs find: QNX fs-dos cannot
@@ -80,6 +88,20 @@ list_payload() {
     done
     if [ -s "$1" ] && [ -n "$missing" ]; then
         echo "FAILED release incomplete, missing in $RES:$missing"; rm -f "$1"; return 1
+    fi
+    alts_found=0
+    for a in $ALTS_ASSETS; do
+        [ -f "$RES/$a" ] && alts_found=$((alts_found+1))
+    done
+    if [ "$alts_found" -gt 0 ]; then
+        alts_missing=
+        for a in $ALTS_ASSETS; do
+            if [ -f "$RES/$a" ]; then printf '%s|%s\n' "$RES/$a" "$(flat_dest "$a")" >> "$1"
+            else alts_missing="$alts_missing $a"; fi
+        done
+        if [ -n "$alts_missing" ]; then
+            echo "FAILED altScreen release incomplete, missing in $RES:$alts_missing"; rm -f "$1"; return 1
+        fi
     fi
     if [ -d "$ROOT" ]; then
         ( cd "$ROOT" && find . -type f > "$1.tree" ) 2> "$1.err"
@@ -210,6 +232,7 @@ uninstall)
         rm -f "$dest"
     done < "$LIST"
     rm -f "$LIST"
+    rm -rf /mnt/app/root/carplay-altscreen 2>/dev/null || true
     # restore in-place patched configs
     [ -e "$CFG.carplay-stock" ] && mv -f "$CFG.carplay-stock" "$CFG"
     [ -e "$DIO.carplay-stock" ] && mv -f "$DIO.carplay-stock" "$DIO"

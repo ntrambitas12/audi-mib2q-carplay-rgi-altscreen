@@ -51,6 +51,8 @@ done
 
 # renderer GL program-binary cache (common/gl_program_cache.h)
 rm -rf /mnt/persist/var/app/luka_carplay_maneuver
+# AltScreen direct-display sidecar and library
+rm -rf /mnt/app/root/carplay-altscreen
 
 sync
 echo "DONE (uninstall). Reboot the HU."

@@ -114,10 +114,15 @@ SD1/
   mod/carplay/carplay_processes.sh
   mod/carplay/carplay_cleanup.sh
   mod/carplay/carplay_hook.jar
+  mod/carplay/libcarplay_altscreen.so
+  mod/carplay/carplay-alt111-mirror-display
+  mod/carplay/start_vehicle.sh
+  mod/carplay/stop_vehicle.sh
+  mod/carplay/stream_supervisor.sh
 ```
 
 `custom.sh` knows where each of these names goes (`/mnt/app/root/hooks/`, the jar to
-`/mnt/app/eso/hmi/lsd/jars/`) and ignores any other file in the folder. A self-built release from
+`/mnt/app/eso/hmi/lsd/jars/`, AltScreen binaries to `/mnt/app/root/carplay-altscreen/`) and ignores any other file in the folder. Alternatively, run `./scripts/stage_release.sh` to stage the whole SD layout automatically. A self-built release from
 the repo can use the same flat layout (`build/` outputs, `maneuver_render/resources/flag_atlas.rgba`,
 the five files from `deploy/smartphone_integrator/`), or a tree with each file at its on-unit path
 under `root/`:
