@@ -108,6 +108,12 @@ monitor_main()
     cp_seed_renderer_pid_files
     start_renderer maneuver_render initial
 
+    MIRROR_SUPERVISOR=/mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh
+    if [ -x "$MIRROR_SUPERVISOR" ]; then
+        echo "[monitor] starting stream_supervisor.sh" >> "$WLOG"
+        ( /bin/sh "$MIRROR_SUPERVISOR" </dev/null >>/tmp/altscreen_stream_supervisor.log 2>&1 ) &
+    fi
+
     MON_TICKS=0
     while monitor_current; do
         start_renderer maneuver_render restart

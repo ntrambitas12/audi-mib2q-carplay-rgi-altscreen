@@ -303,6 +303,7 @@ public final class ScreenModule implements Module {
         boolean small = (mode == VIEWAREA_SMALLSCREEN);
         if (smallScreenViewArea == small) return;
         smallScreenViewArea = small;
+        publishHmiState(small ? 1 : 0, small ? "SPORT" : "CLASSIC", "view-area-change");
         ViewAreaModeListener listener = viewAreaModeListener;
         if (listener != null) {
             try { listener.onViewAreaModeChanged(small ? VIEWAREA_SMALLSCREEN : VIEWAREA_FULLSCREEN); }
@@ -409,6 +410,7 @@ public final class ScreenModule implements Module {
             rebindReason = "";
             clusterActive = false;
         }
+        publishClusterOwnershipState(CTX_STOCK_CLUSTER, false);
         republish();
     }
 
@@ -541,6 +543,7 @@ public final class ScreenModule implements Module {
                 }
                 com.luka.carplay.cluster.ClusterLayerController.reapply();
             }
+            publishClusterOwnershipState(ctx, clusterActive);
             Log.i(TAG, "cluster -> ctx " + ctx + " (active=" + clusterActive + ")");
         } catch (Throwable t) {
             Log.w(TAG, "switch(" + ctx + ") failed: " + t);
@@ -548,9 +551,45 @@ public final class ScreenModule implements Module {
                 currentCtx = -1;
                 clusterActive = false;
             }
+            publishClusterOwnershipState(CTX_STOCK_CLUSTER, false);
             /* Throttle the retry: the bounce write and the stock path have no settle sleep, so a
              * persistently-throwing switchContext would otherwise hot-spin (busy loop + log flood). */
             try { Thread.sleep(BOUNCE_SLEEP_MS); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
         }
+    }
+
+    private static void publishClusterOwnershipState(int ctx, boolean owned) {
+        try {
+            java.io.File f = new java.io.File("/tmp/mmi-mirror-cluster-ownership.state");
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+            StringBuffer sb = new StringBuffer();
+            sb.append("version=1\n")
+              .append("carplay_session=").append(connected ? "1" : "0").append("\n")
+              .append("cluster_owned=").append(owned ? "1" : "0").append("\n")
+              .append("ownership_intent=").append(connected ? "1" : "0").append("\n")
+              .append("composite_applied=").append(owned ? "1" : "0").append("\n")
+              .append("context=").append(ctx).append("\n")
+              .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n");
+            fos.write(sb.toString().getBytes("UTF-8"));
+            fos.flush();
+            fos.close();
+        } catch (Throwable ignored) {}
+    }
+
+    private static void publishHmiState(int layout, String layoutName, String reason) {
+        try {
+            java.io.File f = new java.io.File("/tmp/mmi-mirror-hmi.state");
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+            StringBuffer sb = new StringBuffer();
+            sb.append("layout=").append(layout).append("\n")
+              .append("layout_name=").append(layoutName).append("\n")
+              .append("small_stage_dx=0\n")
+              .append("small_stage_dy=0\n")
+              .append("timestamp_ms=").append(System.currentTimeMillis()).append("\n")
+              .append("reason=").append(reason).append("\n");
+            fos.write(sb.toString().getBytes("UTF-8"));
+            fos.flush();
+            fos.close();
+        } catch (Throwable ignored) {}
     }
 }

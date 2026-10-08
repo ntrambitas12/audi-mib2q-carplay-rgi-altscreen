@@ -47,7 +47,12 @@ MONITOR_PID=$!
 
 # Only dio_manager receives the hook. The monitor and the renderer explicitly
 # clear LD_PRELOAD.
-export LD_PRELOAD="$H/libcarplay_hook.so"
+ALTS_LIB=/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so
+if [ -r "$ALTS_LIB" ]; then
+    export LD_PRELOAD="$ALTS_LIB:$H/libcarplay_hook.so"
+else
+    export LD_PRELOAD="$H/libcarplay_hook.so"
+fi
 
 echo "[startup] exec dio_manager pid=$DIO_PID monitor=$MONITOR_PID" >> "$WLOG"
 exec "$DIODIR/dio_manager" "$@"

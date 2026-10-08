@@ -191,6 +191,8 @@ public final class CarPlayApp {
                     // worker, outside the hot device callback/state lock.
                     try { PdcSmallStageGuard.carPlayDisconnected(); }
                     catch (Throwable t) { Log.w(TAG, "OPS presentation cleanup: " + t); }
+                    try { com.luka.carplay.cluster.WheelZoomBridge.logCarPlayLifecycle(false); }
+                    catch (Throwable t) {}
                     stopModules();
                     return;
                 }
@@ -203,6 +205,8 @@ public final class CarPlayApp {
 
                 Log.i(TAG, "onActivate async apply generation=" + generation
                     + " build=" + BUILD_ID);
+                try { com.luka.carplay.cluster.WheelZoomBridge.logCarPlayLifecycle(true); }
+                catch (Throwable t) {}
                 CarplayBus.getInstance().start();        /* idempotent; off stock lifecycle thread */
                 stopModules();
                 if (!lifecycleCurrent(generation, true, context)) return;

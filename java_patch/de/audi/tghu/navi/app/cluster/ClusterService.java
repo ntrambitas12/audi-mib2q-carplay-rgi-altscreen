@@ -998,6 +998,7 @@ public class ClusterService implements NaviMoKoKDKConstants, PowerEventListener 
     }
 
     public void onMagnificationChanged(int i) {
+        com.luka.carplay.cluster.WheelZoomBridge.onMagnificationChanged(i);
         this.combiBAPListener.onMapScaleChanged(i);
         AbstractMap abstractmap = this.mapInterface.getKombiMap();
         if (abstractmap != null) {

@@ -166,17 +166,16 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
 
         /* --- CarPlay cluster: one custom context, A5-class only (not G24) ---
          *   z-order = array order (index 0 = front):
-         *     dc[80] = {98, 101, 102, 33}  nav active: maneuver(98) over the two KDK 987 backings
-         *                                  (101 = 328x180 sport, 102 = 210x153 popup) over the stock
-         *                                  native map (33)
-         *   98 = maneuver overlay (maneuver_render, transparent when idle); there is NO CarPlay video
-         *   plane — the maneuver overlay composites over the head unit's own native map (33), the same
-         *   displayable the stock cluster context 74 already carries.
+         *     dc[80] = {98, 101, 102, 3}   nav active: maneuver(98) over the two KDK 987 backings
+         *                                  (101 = 328x180 sport, 102 = 210x153 popup) over the CarPlay
+         *                                  AltScreen native video stream (displayable 3)
+         *   98 = maneuver overlay (maneuver_render, transparent when idle); composites over the
+         *   CarPlay AltScreen direct video stream (displayable 3) rendered by carplay-alt111-mirror-display.
          *   Displayable 103 is NOT creatable (unregistered DSI id); 101/102 already exist as the 987
          *   Image backings, so we reuse those.  Plane geometry lives in ClusterLayerController; the
          *   74<->80 switch is driven by ScreenModule (no-nav state is plain stock ctx 74). */
         if (this.framework.getKombiType() != KOMBI_TYPE_G24) {
-            this.dc[CTX_CARPLAY_NAV] = new DisplayContext(CTX_CARPLAY_NAV, new int[]{98, 101, 102, 33});
+            this.dc[CTX_CARPLAY_NAV] = new DisplayContext(CTX_CARPLAY_NAV, new int[]{98, 101, 102, 3});
         } else {
             this.defineContextsForG24();
         }
