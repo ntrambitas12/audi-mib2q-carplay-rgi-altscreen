@@ -144,28 +144,52 @@ public final class ScreenModule implements Module {
         cycleMapMode();
     }
 
+    /* Serialises whole cycleMapMode calls and the worker's displayable sync.  Lock order:
+     * CYCLE_LOCK -> LOCK; the DisplayManager monitor is only ever taken with LOCK released. */
+    private static final Object CYCLE_LOCK = new Object();
+    private static volatile boolean streamReadyCached = false;  /* worker poll only; read under LOCK */
+    private static int streamReadyPolls = 0;                    /* consecutive true polls (guarded by LOCK) */
+    private static volatile int lastAppliedBaseDisplayable = -1;
+
     public static void cycleMapMode() {
-        int nextDisplayable;
         int currentDesired;
         boolean isOwned;
         boolean session;
-        synchronized (LOCK) {
-            activeMapMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
-            nextDisplayable = (activeMapMode == MAP_MODE_CARPLAY) ? 3 : 33;
-            Log.i(TAG, "Map mode cycled -> " + (activeMapMode == MAP_MODE_CARPLAY ? "CARPLAY (default)" : "AUDI_BACKUP (stock Audi map)"));
-            recomputeDesiredCtxLocked();
-            if (desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER) {
-                rebindPending = true;
-                rebindReason = "map-mode-cycle";
+        synchronized (CYCLE_LOCK) {
+            int nextMode;
+            int nextDisplayable;
+            synchronized (LOCK) {
+                nextMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
             }
-            currentDesired = desiredCtx;
-            isOwned = clusterActive;
-            session = connected;
-            LOCK.notifyAll();
-        }
+            // Stream is not polled in Audi mode, so the cache may be stale on entry to CarPlay: take one fresh
+            // read here (file I/O, so inside CYCLE_LOCK but outside LOCK). Audi mode always uses 33.
+            boolean freshReady = (nextMode == MAP_MODE_CARPLAY) && isAltScreenStreamReady();
+            nextDisplayable = freshReady ? 3 : 33;
 
-        // Swap base displayable outside ScreenModule.LOCK to avoid holding LOCK while acquiring DM monitor
-        de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(nextDisplayable);
+            // Swap dc[80] BEFORE committing the mode so the worker never rebinds with a stale dc[80];
+            // done outside ScreenModule.LOCK to avoid holding LOCK while acquiring the DM monitor.
+            de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(nextDisplayable);
+            lastAppliedBaseDisplayable = nextDisplayable;
+
+            synchronized (LOCK) {
+                activeMapMode = nextMode;
+                if (nextMode == MAP_MODE_CARPLAY) {
+                    // Fresh read, no debounce needed: keeps recomputeDesiredCtxLocked consistent with dc[80].
+                    streamReadyCached = freshReady;
+                    streamReadyPolls = 0;
+                }
+                Log.i(TAG, "Map mode cycled -> " + (activeMapMode == MAP_MODE_CARPLAY ? "CARPLAY (default)" : "AUDI_BACKUP (stock Audi map)"));
+                recomputeDesiredCtxLocked();
+                if (desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER) {
+                    rebindPending = true;
+                    rebindReason = "map-mode-cycle";
+                }
+                currentDesired = desiredCtx;
+                isOwned = clusterActive;
+                session = connected;
+                LOCK.notifyAll();
+            }
+        }
         publishClusterOwnershipState(currentDesired, isOwned, session);
     }
 
@@ -179,7 +203,8 @@ public final class ScreenModule implements Module {
         if (activeMapMode == MAP_MODE_CARPLAY) {
             // In CarPlay mode: take CTX_CLUSTER continuously when the stream is ready (cruising & navigating)
             // or during active turn maneuvers. If stream is not ready, safely fall back to stock cluster (74).
-            boolean streamReady = isAltScreenStreamReady();
+            // streamReadyCached is refreshed only by the worker poll (file I/O must never run under LOCK).
+            boolean streamReady = streamReadyCached;
             desiredCtx = (streamReady || navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
         } else {
             // In Audi backup mode: cruising stays on stock cluster 74; turn approaches take CTX_CLUSTER (80)
@@ -441,9 +466,15 @@ public final class ScreenModule implements Module {
             navHidePending = false;
             rgdActive = false;
             clusterActive = false;
+            streamReadyCached = false;
+            streamReadyPolls = 0;
             recomputeDesiredCtxLocked();
         }
-        de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(3);
+        /* New session: CarPlay mode with the stream not yet ready => stock map (33) until it flips. */
+        synchronized (CYCLE_LOCK) {
+            de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(33);
+            lastAppliedBaseDisplayable = 33;
+        }
         synchronized (LOCK) {
             /* Create the single persistent worker once; recreate only if it never started or died.
              * Assign the field ONLY after start() succeeds so a throw leaves worker==null for retry. */
@@ -474,6 +505,8 @@ public final class ScreenModule implements Module {
             rebindPending = false;
             rebindReason = "";
             clusterActive = false;
+            streamReadyCached = false;
+            streamReadyPolls = 0;
         }
         publishClusterOwnershipState(CTX_STOCK_CLUSTER, false, false);
         republish();
@@ -483,45 +516,102 @@ public final class ScreenModule implements Module {
      * Switch worker — the single serialized DM writer.
      * ============================================================ */
 
+    /** Effective base displayable for dc[80].  Caller must hold LOCK.
+     *  CarPlay mode: 3 only while the stream is ready, else the stock map (33).  Audi mode: always 33. */
+    private static int effectiveBaseDisplayableLocked() {
+        return (activeMapMode == MAP_MODE_CARPLAY && streamReadyCached) ? 3 : 33;
+    }
+
+    /** Swap dc[80] to the current effective base displayable if it differs from what was last applied.
+     *  Takes CYCLE_LOCK (so it cannot interleave with cycleMapMode's swap+commit), then LOCK briefly
+     *  to read state; the DisplayManager monitor is only taken with LOCK released.  Caller must NOT hold LOCK. */
+    private static void syncBaseDisplayable() {
+        synchronized (CYCLE_LOCK) {
+            int eff;
+            synchronized (LOCK) { eff = effectiveBaseDisplayableLocked(); }
+            if (eff != lastAppliedBaseDisplayable) {
+                de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(eff);
+                lastAppliedBaseDisplayable = eff;
+            }
+        }
+    }
+
+    /** Fold one stream-ready poll sample into the cached flag.  Caller must hold LOCK.
+     *  true->false applies immediately; false->true needs two consecutive true polls. */
+    private static void applyStreamPollLocked(boolean ready) {
+        boolean prev = streamReadyCached;
+        if (!ready) {
+            streamReadyPolls = 0;
+            streamReadyCached = false;
+        } else if (!prev) {
+            streamReadyPolls++;
+            if (streamReadyPolls >= 2) {
+                streamReadyCached = true;
+                streamReadyPolls = 0;
+            }
+        }
+        if (streamReadyCached == prev) return;
+        int prevDesired = desiredCtx;
+        recomputeDesiredCtxLocked();
+        Log.i(TAG, "CarPlay stream readiness " + prev + " -> " + streamReadyCached
+            + " desiredCtx " + prevDesired + " -> " + desiredCtx);
+        /* On ctx 80 already: only a rebind makes the compositor re-read the swapped dc[80]. */
+        if (desiredCtx == prevDesired && desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER
+                && activeMapMode == MAP_MODE_CARPLAY) {
+            rebindPending = true;
+            rebindReason = "stream-ready-change";
+        }
+    }
+
     private void switchLoop() {
         contextWriterThread = Thread.currentThread();
+        boolean havePoll = false;      /* a stream-ready sample read outside LOCK, waiting to be folded in */
+        boolean polled = false;
         while (true) {
-            int target; IDisplayManager d; boolean reconcileOnly = false;
+            int target = 0; IDisplayManager d = null; boolean reconcileOnly = false; boolean pollNow = false;
             synchronized (LOCK) {
                 while (dm == null) {
                     try { LOCK.wait(); } catch (InterruptedException e) { /* persistent worker */ }
+                }
+                boolean skipWait = havePoll;
+                if (havePoll) {
+                    havePoll = false;
+                    if (connected && activeMapMode == MAP_MODE_CARPLAY) applyStreamPollLocked(polled);
                 }
                 if (desiredCtx == CTX_CLUSTER && rebindPending) {
                     rebindPending = false;
                     Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
                 } else if (desiredCtx == currentCtx) {
-                    try {
-                        if (desiredCtx == CTX_CLUSTER)
-                            LOCK.wait(CONTEXT_RECONCILE_MS);
-                        else if (connected && activeMapMode == MAP_MODE_CARPLAY)
-                            LOCK.wait(500L);
-                        else
-                            LOCK.wait();
-                    } catch (InterruptedException e) { /* persistent worker */ }
-                    if (dm == null) continue;
-                    if (connected && activeMapMode == MAP_MODE_CARPLAY) {
-                        int prevDesired = desiredCtx;
-                        recomputeDesiredCtxLocked();
-                        if (desiredCtx != prevDesired) {
-                            Log.i(TAG, "CarPlay stream readiness transitioned desiredCtx " + prevDesired + " -> " + desiredCtx);
-                            continue;
-                        }
+                    if (!skipWait) {
+                        try {
+                            if (desiredCtx == CTX_CLUSTER)
+                                LOCK.wait(CONTEXT_RECONCILE_MS);
+                            else if (connected && activeMapMode == MAP_MODE_CARPLAY)
+                                LOCK.wait(500L);
+                            else
+                                LOCK.wait();
+                        } catch (InterruptedException e) { /* persistent worker */ }
+                        if (dm == null) continue;
+                        /* Read the stream marker outside LOCK, then come back and fold it in. */
+                        pollNow = (connected && activeMapMode == MAP_MODE_CARPLAY);
                     }
-                    if (desiredCtx != currentCtx) continue;
-                    if (desiredCtx == CTX_CLUSTER && rebindPending) {
-                        rebindPending = false;
-                        Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
-                    } else {
-                        if (desiredCtx != CTX_CLUSTER) continue;
-                        reconcileOnly = true;
+                    if (!pollNow) {
+                        if (desiredCtx != currentCtx) continue;
+                        if (desiredCtx == CTX_CLUSTER && rebindPending) {
+                            rebindPending = false;
+                            Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
+                        } else {
+                            if (desiredCtx != CTX_CLUSTER) continue;
+                            reconcileOnly = true;
+                        }
                     }
                 }
                 target = desiredCtx; d = dm;
+            }
+            if (pollNow) {
+                polled = isAltScreenStreamReady();
+                havePoll = true;
+                continue;
             }
             if (reconcileOnly) {
                 int actual;
@@ -576,6 +666,9 @@ public final class ScreenModule implements Module {
                         return;
                     }
                 }
+                /* dc[80] must carry the effective base displayable (3 only with a live stream, else the
+                 * stock map 33) BEFORE the compositor selects it.  Outside LOCK. */
+                if (ctx == CTX_CLUSTER) syncBaseDisplayable();
                 d.switchContext(ctx, TERMINAL_CLUSTER, null);
                 boolean stillValid;
                 synchronized (LOCK) {
@@ -643,22 +736,42 @@ public final class ScreenModule implements Module {
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
     private static final String STREAM_READY_FILE = "/tmp/altscreen-private111.stream-ready";
 
+    /* Written by the sidecar only after its first frame is presented; start_vehicle.sh deletes it on
+     * every sidecar start (ALT111_JAVA_BASE_READY_FILE), so a stale stream-ready marker cannot pass. */
+    private static final String BASE_READY_FILE = "/tmp/mmi-mirror-basevideo.ready";
+    private static final int MIN_STREAM_FRAMES = 2;
+
+    private static boolean clusterRenameWarned = false;   /* guarded by STATE_FILE_LOCK */
+    private static boolean hmiRenameWarned = false;       /* guarded by STATE_FILE_LOCK */
+
     /**
-     * Checks whether the native AltScreen video stream supervisor has confirmed decoded frame readiness.
+     * Checks whether the native AltScreen video stream supervisor has confirmed decoded frame readiness:
+     * marker has ready=1 (and frames>=2 when reported) AND the sidecar's first-present file exists.
+     * Does file I/O: never call while holding LOCK.
      */
     public static boolean isAltScreenStreamReady() {
         try {
             java.io.File file = new java.io.File(STREAM_READY_FILE);
             if (!file.exists() || file.length() == 0) return false;
+            if (!new java.io.File(BASE_READY_FILE).exists()) return false;
+            boolean ready = false;
+            int frames = -1;
             java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(file));
             try {
                 String line;
                 while ((line = br.readLine()) != null) {
-                    if (line.startsWith("ready=1")) return true;
+                    line = line.trim();
+                    if (line.equals("ready=1")) {
+                        ready = true;
+                    } else if (line.startsWith("frames=")) {
+                        try { frames = Integer.parseInt(line.substring(7).trim()); }
+                        catch (NumberFormatException nfe) { frames = -1; }
+                    }
                 }
             } finally {
                 br.close();
             }
+            return ready && (frames < 0 || frames >= MIN_STREAM_FRAMES);
         } catch (Throwable ignored) {}
         return false;
     }
@@ -681,7 +794,10 @@ public final class ScreenModule implements Module {
                 fos.write(bytes);
                 fos.flush();
                 fos.close();
-                tmp.renameTo(target);
+                if (!tmp.renameTo(target) && !clusterRenameWarned) {
+                    clusterRenameWarned = true;
+                    Log.w(TAG, "cluster ownership state rename failed: " + CLUSTER_STATE_FILE);
+                }
             } catch (Throwable ignored) {}
         }
     }
@@ -703,7 +819,10 @@ public final class ScreenModule implements Module {
                 fos.write(bytes);
                 fos.flush();
                 fos.close();
-                tmp.renameTo(target);
+                if (!tmp.renameTo(target) && !hmiRenameWarned) {
+                    hmiRenameWarned = true;
+                    Log.w(TAG, "hmi state rename failed: " + HMI_STATE_FILE);
+                }
             } catch (Throwable ignored) {}
         }
     }
