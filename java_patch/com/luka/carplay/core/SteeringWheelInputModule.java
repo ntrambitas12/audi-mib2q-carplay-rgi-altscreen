@@ -40,9 +40,16 @@ public final class SteeringWheelInputModule implements Module {
     private static final int ATTR_VALID = 1;
     private static final long COLLAPSED_SELECT_WINDOW_MS = 600L;
 
+    /** Configurable duration (ms) for press-and-hold on the left wheel to cycle between CarPlay and stock Audi maps. */
+    public static final long LONG_PRESS_DURATION_MS = 5000L;
+
     private static final Object SELECT_LOCK = new Object();
     private static long pendingPressUntil;
     private static long pendingReleaseUntil;
+
+    private final java.util.Timer longPressTimer = new java.util.Timer(true);
+    private java.util.TimerTask currentLongPressTask;
+    private boolean longPressHandled;
 
     private final RawKeyListener listener = new RawKeyListener();
     private FrameworkRef.ServiceHandle keyPanelHandle;
@@ -131,6 +138,13 @@ public final class SteeringWheelInputModule implements Module {
         keyPanelHandle = null;
         combiManagerHandle = null;
         clearPendingSelects();
+        synchronized (this) {
+            if (currentLongPressTask != null) {
+                currentLongPressTask.cancel();
+                currentLongPressTask = null;
+            }
+            longPressHandled = false;
+        }
 
         if (panel != null) {
             try { panel.clearNotification(DSIKeyPanel.ATTR_KEY2, listener); }
@@ -217,12 +231,53 @@ public final class SteeringWheelInputModule implements Module {
                     || (keyState != KST_PRESSED && keyState != KST_RELEASED)) return;
 
             armCollapsedSelect(keyState);
-            if (keyState != KST_PRESSED) return;
 
-            boolean mapTab = isConfirmedMapTab();
-            Log.i(TAG, "MFW OK pressed board=" + keyboardId + " mapTab=" + mapTab);
-            if (!mapTab) return;
-            ScreenModule.onSteeringWheelOkPressed();
+            if (keyState == KST_PRESSED) {
+                final boolean mapTab = isConfirmedMapTab();
+                synchronized (SteeringWheelInputModule.this) {
+                    if (currentLongPressTask != null) {
+                        currentLongPressTask.cancel();
+                        currentLongPressTask = null;
+                    }
+                    longPressHandled = false;
+                    currentLongPressTask = new java.util.TimerTask() {
+                        public void run() {
+                            synchronized (SteeringWheelInputModule.this) {
+                                if (!running) return;
+                                longPressHandled = true;
+                            }
+                            Log.i(TAG, "MFW left roller long press triggered (" + LONG_PRESS_DURATION_MS + " ms)");
+                            ScreenModule.onSteeringWheelLongPressed();
+                        }
+                    };
+                    try {
+                        longPressTimer.schedule(currentLongPressTask, LONG_PRESS_DURATION_MS);
+                    } catch (Throwable t) {
+                        Log.w(TAG, "failed to schedule long press timer: " + t);
+                    }
+                }
+                return;
+            }
+
+            if (keyState == KST_RELEASED) {
+                boolean wasHandled;
+                synchronized (SteeringWheelInputModule.this) {
+                    if (currentLongPressTask != null) {
+                        currentLongPressTask.cancel();
+                        currentLongPressTask = null;
+                    }
+                    wasHandled = longPressHandled;
+                    longPressHandled = false;
+                }
+                if (!wasHandled) {
+                    // Short click (< LONG_PRESS_DURATION_MS): trigger route-info ETA / Street toggle
+                    boolean mapTab = isConfirmedMapTab();
+                    Log.i(TAG, "MFW OK short-pressed board=" + keyboardId + " mapTab=" + mapTab);
+                    if (mapTab) {
+                        ScreenModule.onSteeringWheelOkPressed();
+                    }
+                }
+            }
         }
 
         public void asyncException(int errorCode, String errorString, int requestType) { }

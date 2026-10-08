@@ -27,18 +27,19 @@ On the `altScreen` branch:
 3. `libcarplay_altscreen.so` polls this event queue and dispatches native `changeMapZoomLevel` commands to Apple CarPlay over the secondary screen control plane.
 4. When cruising or outside Context 80, the zoom steps fall through to stock.
 
-## ⚙️ Press (OK) -> route-info toggle
+## ⚙️ Press (Short Click vs Press-and-Hold)
 
-The raw MFW roller press (DSI key 40, `KEY_MFW_ROLLER_LEFT`) and the centre-console DDS (key 16,
-`KEY_DDS`) both collapse to the same `DDS_SELECT` in the stock keyboard stack. `SteeringWheelInputModule`
-observes the raw `ATTR_KEY2` stream and marks only key 40, so `CarplayDSILifecycleController.updateKey`
-can **suppress that one copy** of `DDS_SELECT` before it reaches iOS (via `consumeCollapsedSelect`) -
-the centre knob still selects in the CarPlay Main UI.
+The raw MFW roller press (DSI key 40, `KEY_MFW_ROLLER_LEFT`) supports two distinct actions:
 
-Gated to the confirmed VC map tab, the press then calls `ScreenModule.onSteeringWheelOkPressed()` ->
-`RouteGuidance` toggles the cluster route-info line between the **next turn-to street** (phase 0) and
-the **trip summary** (ETA / arrival clock + remaining, phase 1). Phase 1 falls back to phase 0 by
-itself 20 s after it was published. Text layout: [vc-route-text](../rgd/vc-route-text.md) (FctID 19).
+### 1. ⏱️ Short Click (< 5s): Route-Info Toggle (Next Street ↔ ETA)
+A quick click toggles the cluster route-info text line between the **next turn-to street** (phase 0) and the **trip summary** (ETA / arrival clock + remaining, phase 1). Phase 1 falls back to phase 0 by itself after 20 s.
+`SteeringWheelInputModule` suppresses the collapsed `DDS_SELECT` copy to prevent accidental selection on the CarPlay center screen.
+
+### 2. 🔄 Press-and-Hold (>= 5s, configurable `LONG_PRESS_DURATION_MS`): Map Source Cycling
+Holding the left roller for 5 seconds cycles the Virtual Cockpit map between:
+- **CarPlay Maps (Default)**: Cluster Context 80 loads CarPlay AltScreen live video (Displayable 3).
+- **Stock Audi Maps (Secondary Backup)**: Cluster switches to the onboard Audi Navigation map (Displayable 33 / Context 74).
+Wheel roller rotation also adjusts dynamically: zooming CarPlay map when in CarPlay mode, and stock Audi map when in Audi backup mode.
 
 ```mermaid
 flowchart LR

@@ -51,11 +51,11 @@ public final class WheelZoomBridge {
 
         if (delta == 0) return;
 
-        // Gate: only send zoom deltas when CarPlay owns the cluster (Context 80)
-        if (!ScreenModule.isClusterActive()) {
+        // Gate: only send zoom deltas when CarPlay owns the cluster (Context 80) AND CarPlay map is active
+        if (!ScreenModule.isClusterActive() || !ScreenModule.isCarPlayMapActive()) {
             ignoredNotOwnedCount++;
             diag("WHEEL_ZOOM_INPUT magnification=" + magnification + " delta=" + delta 
-                + " action=IGNORED reason=cluster_not_owned" + counterSummary());
+                + " action=IGNORED reason=cluster_not_owned_or_audi_map" + counterSummary());
             return;
         }
 

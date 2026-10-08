@@ -37,9 +37,6 @@ cp "$PROJECT_DIR/maneuver_render/resources/flag_atlas.rgba" "$TARGET_DIR/mod/car
 # 4. Compiled binaries (check build/ first)
 if [ -f "$PROJECT_DIR/build/carplay_hook.jar" ]; then
     cp "$PROJECT_DIR/build/carplay_hook.jar" "$TARGET_DIR/mod/carplay/"
-elif [ -f "$PROJECT_DIR/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar" ]; then
-    echo "NOTICE: Using staged carplay_hook-basevideo3.jar (build/carplay_hook.jar not found)"
-    cp "$PROJECT_DIR/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar" "$TARGET_DIR/mod/carplay/carplay_hook.jar"
 else
     echo "ERROR: carplay_hook.jar not found. Run ./scripts/build_java.sh first!" >&2; exit 1
 fi
@@ -66,25 +63,11 @@ for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh 
     fi
 done
 
-# 6. Stage Toolbox directory for dual compatibility
-if [ -d "$PROJECT_DIR/Toolbox" ]; then
-    cp -R "$PROJECT_DIR/Toolbox" "$TARGET_DIR/"
-    # Update Toolbox's HMI jar to match the newly compiled JAR
-    if [ -f "$TARGET_DIR/mod/carplay/carplay_hook.jar" ]; then
-        cp "$TARGET_DIR/mod/carplay/carplay_hook.jar" "$TARGET_DIR/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
-    fi
-fi
-
-# 7. Copy SD card readme if present
-if [ -f "$PROJECT_DIR/SD_CARD_README.txt" ]; then
-    cp "$PROJECT_DIR/SD_CARD_README.txt" "$TARGET_DIR/"
-fi
-
+# 6. SD Card instructions
 echo "Staged successfully! Contents in $TARGET_DIR:"
 ls -lh "$TARGET_DIR/mod/carplay"
 echo ""
 echo "SD Card Setup:"
 echo "1. Copy the contents of $TARGET_DIR directly to the root of your FAT32 SD card."
 echo "2. Insert SD into MHI2Q MMX Slot 1."
-echo "3. Run via GEM -> M.I.B. -> Advanced Settings -> Run Custom Script."
-echo "   (or via MIB2 Toolbox if using Green Menu Toolbox)."
+echo "3. In GEM: M.I.B. -> Advanced Settings -> Run Custom Script."

@@ -119,9 +119,69 @@ public final class ScreenModule implements Module {
         }
     }
 
+    /* ------------------------------------------------------------
+     * Map Mode Cycling (press-and-hold left steering wheel roller >= 5s)
+     * Cycle between CarPlay Maps (default) and Stock Audi Maps (backup).
+     * ------------------------------------------------------------ */
+    public static final int MAP_MODE_CARPLAY      = 0;  // Default: CarPlay AltScreen map (displayable 3)
+    public static final int MAP_MODE_AUDI_BACKUP  = 1;  // Secondary: Stock Audi onboard map (displayable 33)
+
+    private static volatile int activeMapMode = MAP_MODE_CARPLAY;
+
+    public static boolean isCarPlayMapActive() {
+        return activeMapMode == MAP_MODE_CARPLAY;
+    }
+
+    public static int getActiveMapMode() {
+        return activeMapMode;
+    }
+
+    public static void onSteeringWheelLongPressed() {
+        if (!connected) {
+            Log.i(TAG, "long press ignored: CarPlay session not connected");
+            return;
+        }
+        cycleMapMode();
+    }
+
+    public static void cycleMapMode() {
+        synchronized (LOCK) {
+            if (activeMapMode == MAP_MODE_CARPLAY) {
+                activeMapMode = MAP_MODE_AUDI_BACKUP;
+                Log.i(TAG, "Map mode cycled -> AUDI_BACKUP (stock Audi map)");
+                de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(33);
+            } else {
+                activeMapMode = MAP_MODE_CARPLAY;
+                Log.i(TAG, "Map mode cycled -> CARPLAY (default)");
+                de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(3);
+            }
+            recomputeDesiredCtxLocked();
+            rebindPending = true;
+            rebindReason = "map-mode-cycle";
+            LOCK.notifyAll();
+        }
+        publishClusterOwnershipState(desiredCtx, clusterActive);
+    }
+
     private static void recomputeDesiredCtxLocked() {
-        navActive = (routeActive && presentationActive) || navHidePending;
-        desiredCtx = (connected && navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        if (!connected) {
+            navActive = false;
+            desiredCtx = CTX_STOCK_CLUSTER;
+            return;
+        }
+
+        if (activeMapMode == MAP_MODE_CARPLAY) {
+            // CarPlay maps load by default!
+            // When connected, cluster holds CTX_CLUSTER (80) with displayable 3 (CarPlay AltScreen map)
+            navActive = true;
+            desiredCtx = CTX_CLUSTER;
+        } else {
+            // Audi stock map backup mode:
+            // Cruising drops to CTX_STOCK_CLUSTER (74, Audi map 33).
+            // Turn maneuvers activate CTX_CLUSTER (80, Audi map 33 + maneuver 98 overlay).
+            navActive = (routeActive && presentationActive) || navHidePending;
+            desiredCtx = navActive ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        }
     }
 
     /** Recompute desiredCtx from connected/routeActive/presentationActive and wake the worker. Caller must NOT hold LOCK. */
