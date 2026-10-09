@@ -21,7 +21,7 @@ mkdir -p "$TARGET_DIR/mod/carplay"
 # Strip CRs from scripts and JSON, copy everything else (binaries) untouched.
 copy_lf() {
     case "$1" in
-        *.sh|*.json) tr -d '' < "$1" > "$2" ;;
+        *.sh|*.json) tr -d '\015' < "$1" > "$2" ;;
         *)           cp "$1" "$2" ;;
     esac
 }
@@ -66,7 +66,15 @@ fi
 for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh; do
     src="$PROJECT_DIR/deploy/altscreen/$f"
     if [ -f "$src" ]; then
-        copy_lf "$src" "$TARGET_DIR/mod/carplay/$f"
+        if [ "$f" = "carplay-alt111-mirror-display" ] && [ "${ALT111_KEEP_LOGO:-0}" != "1" ]; then
+            # Personal build: skip the sidecar's embedded startup logo (see scripts/patch_altscreen_logo.sh).
+            # The repo keeps the author's binary untouched; only the staged copy is patched.
+            # Set ALT111_KEEP_LOGO=1 to stage the unmodified binary.  A non-matching build is staged
+            # unpatched with a warning, never an error.
+            sh "$SCRIPT_DIR/patch_altscreen_logo.sh" "$src" "$TARGET_DIR/mod/carplay/$f" || true
+        else
+            copy_lf "$src" "$TARGET_DIR/mod/carplay/$f"
+        fi
     else
         echo "ERROR: Missing $src" >&2; exit 1
     fi

@@ -186,7 +186,7 @@ public final class WheelZoomBridge {
     }
 
     private static void diag(String msg) {
-        Log.d(TAG, msg);
+        Log.i(TAG, msg);   /* INFO: lands in carplay_java.log with a boot-relative timestamp, so zoom events can be lined up with the hook and sidecar logs */
         FileOutputStream fos = null;
         try {
             File f = new File(LOG_FILE);
