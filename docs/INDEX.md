@@ -31,14 +31,15 @@ final verified fact. `reconciles:` frontmatter records which legacy docs were fo
 - [navsd-catalogue](rgd/navsd-catalogue.md) - complete NavSD FctID catalogue (1-56)
 
 ## 🖥️ Cluster  [x]
-- [display-contexts](cluster/display-contexts.md) - dc[74]/dc[80], displayables 98/33/101/102, switch worker
+- [altscreen](altscreen.md) - the CarPlay map on the cluster: data path, contexts 74/80/81, launch environment, zoom limit, troubleshooting
+- [display-contexts](cluster/display-contexts.md) - dc[74]/dc[80]/dc[81], displayables 98/3/33/101/102, switch worker
 - [compositing](cluster/compositing.md) - maneuver overlay over native map, HU->MOST->VC H.264
 - [maneuver-renderer](cluster/maneuver-renderer.md) - :19800 protocol, C++ scene engine, visible area, watchdog
 - [kdk-geometry](cluster/kdk-geometry.md) - KDK backings 101/102, VC Fct44/Fct54-driven visibility & stage, HU geometry table
 
 ## 🎛️ Input  [x]
 - [touchpad-dpad](input/touchpad-dpad.md) - MMI touchpad -> DPAD bridge (TouchpadController)
-- [steering-wheel](input/steering-wheel.md) - MFW roller: rotation = stock zoom, press = route-info toggle
+- [steering-wheel](input/steering-wheel.md) - MFW roller: rotation = zoom, short press = route-info toggle, 5 s hold = CarPlay / Audi map
 
 ## 📱 HMI - head-unit screen  [x]
 - [pdc-small-stage](hmi/pdc-small-stage.md) - CarPlay stays beside the side parking (OPS) popup: small stage, message 108, APS drawer, status line

@@ -212,6 +212,9 @@ install)
         echo "  $dest"
     done < "$LIST"
     rm -f "$LIST"
+    # Earlier test builds shipped an EGL shim that is no longer used; remove stale copies.
+    rm -f /mnt/app/root/carplay-altscreen/bin/mirror/libaltscreen_egl_fix.so \
+          /mnt/app/root/carplay-altscreen/lib/libaltscreen_egl_fix.so 2>/dev/null || true
     # M.I.B.'s "NavActiveIgnore" (navignore_audi/_vw.jar, installed as NavActiveIgnore.jar)
     # replaces org.dsi.ifc.carplay.AppState so getAppStateID()/getOwner() always return 0:
     # the HMI no longer sees which resources CarPlay owns, which our lifecycle relies on.

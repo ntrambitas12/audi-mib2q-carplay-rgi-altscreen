@@ -32,9 +32,9 @@ rebooted for you.*
 
 ## 📦 What a release contains
 
-This branch replaces **no stock binary** and edits **no firewall profile**: the cluster keeps the
-head unit's own map, so there is no CarPlay video stream and no extra RTSP port to open. A release is
-eight files plus two in-place config edits.
+A release replaces **no stock binary**. It is eight RGI files, five optional AltScreen files (the CarPlay
+map on the cluster, see [altscreen](../altscreen.md)) and two in-place config edits. The AltScreen files are
+all-or-nothing: if none of them is on the card, only the RGI overlay on the Audi map is installed.
 
 | File | Source in the repo | On-unit path | Mode |
 |---|---|---|---|
@@ -43,6 +43,9 @@ eight files plus two in-place config edits.
 | `flag_atlas.rgba` | `maneuver_render/resources/` | `/mnt/app/root/hooks/` (read from there, `maneuver_render/main.c:45`) | 644 |
 | `carplay_startup.sh`, `carplay_monitor.sh`, `carplay_processes.sh`, `carplay_cleanup.sh` | `deploy/smartphone_integrator/` | `/mnt/app/root/hooks/` | 755 |
 | `carplay_hook.jar` | `build/` (`build_java.sh`) | `/mnt/app/eso/hmi/lsd/jars/` | 644 |
+| `libcarplay_altscreen.so` | `deploy/altscreen/` | `/mnt/app/root/carplay-altscreen/lib/` (preloaded into `dio_manager`) | 755 |
+| `carplay-alt111-mirror-display` | `deploy/altscreen/` (logo-patched when staged) | `/mnt/app/root/carplay-altscreen/bin/mirror/` | 755 |
+| `start_vehicle.sh`, `stop_vehicle.sh`, `stream_supervisor.sh` | `deploy/altscreen/` | `/mnt/app/root/carplay-altscreen/bin/mirror/` | 755 |
 | `carplay_child.json` | `deploy/smartphone_integrator/` | not a file on the unit: spliced into `smartphone_integrator.json` as `children.carplay` | - |
 | `dio_manager.json` | not staged | `/mnt/system/etc/eso/production/`, five route-guidance IDs added in place | - |
 

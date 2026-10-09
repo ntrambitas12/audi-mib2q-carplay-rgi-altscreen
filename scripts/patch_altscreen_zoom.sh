@@ -1,5 +1,11 @@
 #!/bin/sh
 #
+# EXPERIMENT (off by default; enable with ALT111_PATCH_ZOOM=1 when staging): lift the zoom frame gate.
+#
+# RESULT ON THE TEST CAR: no visible change.  The library no longer blocks the zoom steps, but the
+# iPhone's cluster map ignores them while it is idle (no route), so zoom still only works during
+# navigation.  Kept for reference and for anyone who wants to try it on another phone or iOS version.
+#
 # Let the left-roller zoom work on an idle CarPlay cluster map (personal, non-commercial use).
 #
 # libcarplay_altscreen.so gates every wheel-zoom step on "fresh decoded video frames": when the last

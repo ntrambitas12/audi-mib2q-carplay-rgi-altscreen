@@ -1,0 +1,11 @@
+# Scripts and configs that run on the head unit (QNX /bin/sh) must keep LF line endings, also on Windows.
+*.sh      text eol=lf
+*.json    text eol=lf
+custom.sh text eol=lf
+command.sh text eol=lf
+# Binaries: never touch the bytes.
+*.so      binary
+*.jar     binary
+*.rgba    binary
+carplay-alt111-mirror-display binary
+maneuver_render/main binary

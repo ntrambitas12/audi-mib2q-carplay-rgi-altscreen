@@ -12,6 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET_DIR="${1:-$PROJECT_DIR/dist/sd_card}"
+# Where the compiled hook, renderer and jar are (default: build/).  make_release.sh --payload overrides it.
+BUILD_DIR="${BUILD_DIR:-$PROJECT_DIR/build}"
 
 echo "=== Staging Unified CarPlay Release to $TARGET_DIR ==="
 
@@ -27,8 +29,8 @@ copy_lf() {
 }
 
 # 1. Base M.I.B. control scripts
-cp "$PROJECT_DIR/install_MoreIncredibleBash/mod/custom.sh" "$TARGET_DIR/mod/"
-cp "$PROJECT_DIR/install_MoreIncredibleBash/mod/command.sh" "$TARGET_DIR/mod/"
+copy_lf "$PROJECT_DIR/install_MoreIncredibleBash/mod/custom.sh" "$TARGET_DIR/mod/custom.sh"
+copy_lf "$PROJECT_DIR/install_MoreIncredibleBash/mod/command.sh" "$TARGET_DIR/mod/command.sh"
 
 # 2. Smartphone integrator supervisor & configs
 for f in carplay_child.json carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh; do
@@ -44,20 +46,20 @@ done
 cp "$PROJECT_DIR/maneuver_render/resources/flag_atlas.rgba" "$TARGET_DIR/mod/carplay/"
 
 # 4. Compiled binaries (check build/ first)
-if [ -f "$PROJECT_DIR/build/carplay_hook.jar" ]; then
-    cp "$PROJECT_DIR/build/carplay_hook.jar" "$TARGET_DIR/mod/carplay/"
+if [ -f "$BUILD_DIR/carplay_hook.jar" ]; then
+    cp "$BUILD_DIR/carplay_hook.jar" "$TARGET_DIR/mod/carplay/"
 else
     echo "ERROR: carplay_hook.jar not found. Run ./scripts/build_java.sh first!" >&2; exit 1
 fi
 
-if [ -f "$PROJECT_DIR/build/libcarplay_hook.so" ]; then
-    cp "$PROJECT_DIR/build/libcarplay_hook.so" "$TARGET_DIR/mod/carplay/"
+if [ -f "$BUILD_DIR/libcarplay_hook.so" ]; then
+    cp "$BUILD_DIR/libcarplay_hook.so" "$TARGET_DIR/mod/carplay/"
 else
     echo "WARNING: build/libcarplay_hook.so not found. If not yet built, run ./scripts/build_hook.sh"
 fi
 
-if [ -f "$PROJECT_DIR/build/maneuver_render" ]; then
-    cp "$PROJECT_DIR/build/maneuver_render" "$TARGET_DIR/mod/carplay/"
+if [ -f "$BUILD_DIR/maneuver_render" ]; then
+    cp "$BUILD_DIR/maneuver_render" "$TARGET_DIR/mod/carplay/"
 else
     echo "WARNING: build/maneuver_render not found. If not yet built, run ./scripts/build_renderers.sh"
 fi
@@ -66,10 +68,10 @@ fi
 for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh; do
     src="$PROJECT_DIR/deploy/altscreen/$f"
     if [ -f "$src" ]; then
-        if [ "$f" = "libcarplay_altscreen.so" ] && [ "${ALT111_KEEP_ZOOM_GATE:-0}" != "1" ]; then
-            # Personal build: let the wheel zoom work on an idle, route-less CarPlay map (see
-            # scripts/patch_altscreen_zoom.sh).  Only the staged copy is patched; set
-            # ALT111_KEEP_ZOOM_GATE=1 to stage the unmodified library.
+        if [ "$f" = "libcarplay_altscreen.so" ] && [ "${ALT111_PATCH_ZOOM:-0}" = "1" ]; then
+            # EXPERIMENT, off by default: lift the library's "no fresh video frames" zoom gate (see
+            # scripts/patch_altscreen_zoom.sh).  On the test car the iPhone ignored zoom on an idle
+            # map anyway, so the released package ships the library unmodified.
             sh "$SCRIPT_DIR/patch_altscreen_zoom.sh" "$src" "$TARGET_DIR/mod/carplay/$f" || true
         elif [ "$f" = "carplay-alt111-mirror-display" ] && [ "${ALT111_KEEP_LOGO:-0}" != "1" ]; then
             # Personal build: skip the sidecar's embedded startup logo (see scripts/patch_altscreen_logo.sh).

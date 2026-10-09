@@ -35,11 +35,18 @@ The raw MFW roller press (DSI key 40, `KEY_MFW_ROLLER_LEFT`) supports two distin
 A quick click toggles the cluster route-info text line between the **next turn-to street** (phase 0) and the **trip summary** (ETA / arrival clock + remaining, phase 1). Phase 1 falls back to phase 0 by itself after 20 s.
 `SteeringWheelInputModule` suppresses the collapsed `DDS_SELECT` copy to prevent accidental selection on the CarPlay center screen.
 
-### 2. 🔄 Press-and-Hold (>= 5s, configurable `LONG_PRESS_DURATION_MS`): Map Source Cycling
-Holding the left roller for 5 seconds cycles the Virtual Cockpit map between:
-- **CarPlay Maps (Default)**: Cluster Context 80 loads CarPlay AltScreen live video (Displayable 3).
-- **Stock Audi Maps (Secondary Backup)**: Cluster switches to the onboard Audi Navigation map (Displayable 33 / Context 74).
-Wheel roller rotation also adjusts dynamically: zooming CarPlay map when in CarPlay mode, and stock Audi map when in Audi backup mode.
+### 2. 🔄 Press-and-Hold (>= 5 s, `LONG_PRESS_DURATION_MS`): CarPlay map <-> Audi map
+Holding the left roller for 5 seconds flips `ScreenModule`'s map mode:
+- **CarPlay map mode (default after every connection):** cluster context 80 (`{98, 101, 102, 3}`) once the
+  AltScreen sidecar is presenting; the turn arrows ride on top of it.
+- **Audi map mode:** stock cluster 74 while cruising, context 81 (`{98, 101, 102, 33}`: the same arrows over
+  the Audi map) during a turn approach.
+
+The hold only needs a **connected CarPlay session**. It does not need route guidance or a VC map tab (this
+car has no combi manager to report the tab), so it works with no navigation running, and does nothing when no
+phone is connected. The mode resets to CarPlay on disconnect. Details: [altscreen](../altscreen.md).
+Rotation (scroll) zooms the CarPlay map only while it is on screen (context 80) and while navigating, otherwise
+the stock map as without CarPlay.
 
 ```mermaid
 flowchart LR
