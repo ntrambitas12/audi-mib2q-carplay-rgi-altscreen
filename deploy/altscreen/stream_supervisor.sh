@@ -80,11 +80,50 @@ cleanup() {
 trap cleanup 0
 trap 'exit 0' 1 2 15
 
+# Crash-loop protection.  /tmp is RAM on this unit and every sidecar start creates and destroys a Screen window
+# and an EGL context, so a sidecar that cannot start must not be retried once a second forever.  Back off
+# between failed starts and give up on a stream (until it is renewed) after MAX_STARTS starts that did not
+# survive UP_OK_TICKS seconds.  The cluster then simply keeps the stock Audi map (Java waits for the
+# sidecar's first-present file).
+MAX_STARTS=5
+UP_OK_TICKS=60
+BACKOFF_MAX=${ALT111_SUPERVISOR_BACKOFF_MAX:-30}
+LOG_CAP=262144
+STARTS=0
+UPTICKS=0
+START_KEY=""
+GAVE_UP_KEY=""
+MIRROR_LOG="$TMP_ROOT/altscreen_mirror.log"
+
+cap_log() {
+  f=$1
+  [ -f "$f" ] || return 0
+  set -- $(wc -c < "$f" 2>/dev/null)
+  sz=${1:-0}
+  case "$sz" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$sz" -gt "$LOG_CAP" ]; then
+    : > "$f" 2>/dev/null || true
+    echo "STREAM_SUPERVISOR_LOG_TRUNCATED file=$f bytes=$sz" >> "$LOGFILE"
+  fi
+}
+
 while :; do
+  cap_log "$LOGFILE"
+  cap_log "$MIRROR_LOG"
   KEY=$(read_stream_key 2>/dev/null || true)
   OLD_KEY=$(cat "$STATEFILE" 2>/dev/null || true)
 
   if [ -n "$KEY" ]; then
+    if [ "$KEY" != "$START_KEY" ]; then
+      START_KEY=$KEY
+      STARTS=0
+      UPTICKS=0
+      GAVE_UP_KEY=""
+    fi
+    if [ "$KEY" = "$GAVE_UP_KEY" ]; then
+      sleep 5
+      continue
+    fi
     if [ -n "$OLD_KEY" ] && [ "$OLD_KEY" != "$KEY" ]; then
       echo "STREAM_SESSION_CHANGE old=$OLD_KEY new=$KEY action=RESTART_DISPLAY" >> "$LOGFILE"
       stop_display
@@ -97,6 +136,20 @@ while :; do
         RESTART_REASON=sidecar_abnormal
       fi
       echo "STREAM_READY key=$KEY reason=$RESTART_REASON action=START_DISPLAY recover_current_session=1" >> "$LOGFILE"
+      if [ "$STARTS" -ge "$MAX_STARTS" ]; then
+        GAVE_UP_KEY=$KEY
+        rm -f "$ACTIVE" "$STATEFILE" 2>/dev/null || true
+        echo "STREAM_DISPLAY_GIVEUP key=$KEY starts=$STARTS reason=sidecar_keeps_exiting action=KEEP_STOCK_MAP" >> "$LOGFILE"
+        continue
+      fi
+      if [ "$STARTS" -gt 0 ]; then
+        BACKOFF=$((STARTS * STARTS * 2))
+        [ "$BACKOFF" -le "$BACKOFF_MAX" ] || BACKOFF=$BACKOFF_MAX
+        echo "STREAM_DISPLAY_BACKOFF seconds=$BACKOFF start=$((STARTS + 1))/$MAX_STARTS" >> "$LOGFILE"
+        sleep "$BACKOFF"
+      fi
+      STARTS=$((STARTS + 1))
+      UPTICKS=0
       touch "$ACTIVE"
       start_rc=0
       if ALT111_MIRROR_RESTART_REASON="$RESTART_REASON" ALT111_STREAM_SUPERVISED=1 ALT111_RECOVER_CURRENT_SESSION=1 /bin/sh "$START" >> "$LOGFILE" 2>&1; then
@@ -110,11 +163,16 @@ while :; do
         printf '%s\n' "$KEY" > "$STATEFILE"
       else
         rm -f "$ACTIVE" "$STATEFILE" 2>/dev/null || true
-        echo "STREAM_DISPLAY_START_FAILED key=$KEY rc=$start_rc fail_open=YES" >> "$LOGFILE"
+        echo "STREAM_DISPLAY_START_FAILED key=$KEY rc=$start_rc fail_open=YES start=$STARTS/$MAX_STARTS" >> "$LOGFILE"
       fi
     else
       [ -f "$ACTIVE" ] || touch "$ACTIVE"
       [ "$OLD_KEY" = "$KEY" ] || printf '%s\n' "$KEY" > "$STATEFILE"
+      # A sidecar that has stayed up long enough counts as healthy: later restarts get a fresh budget.
+      UPTICKS=$((UPTICKS + 1))
+      if [ "$UPTICKS" -ge "$UP_OK_TICKS" ]; then
+        STARTS=0
+      fi
     fi
   else
     if mirror_running || [ -f "$ACTIVE" ] || [ -s "$STATEFILE" ]; then

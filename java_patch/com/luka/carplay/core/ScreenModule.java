@@ -151,6 +151,13 @@ public final class ScreenModule implements Module {
     private static final Object CYCLE_LOCK = new Object();
     private static volatile boolean streamReadyCached = false;  /* worker poll only; read under LOCK */
     private static int streamReadyPolls = 0;                    /* consecutive true polls (guarded by LOCK) */
+    /* Flap guard (guarded by LOCK): if the sidecar keeps losing "ready" (crash loop), stop offering the CarPlay
+     * map for the rest of this phone connection and stay on the stock Audi map, which is the RGI-safe state. */
+    private static final int READY_DROPS_BEFORE_LATCH = 3;
+    private static final long READY_DROP_WINDOW_MS = 60000L;
+    private static boolean streamLatchedOff = false;
+    private static int readyDrops = 0;
+    private static long readyDropWindowStart = 0L;
     private static volatile int lastAppliedBaseDisplayable = -1;
 
     public static void cycleMapMode() {
@@ -165,7 +172,9 @@ public final class ScreenModule implements Module {
             }
             // Stream is not polled in Audi mode, so the cache may be stale on entry to CarPlay: take one fresh
             // read here (file I/O, so inside CYCLE_LOCK but outside LOCK). Audi mode always uses 33.
-            boolean freshReady = (nextMode == MAP_MODE_CARPLAY) && isAltScreenStreamReady();
+            boolean latched;
+            synchronized (LOCK) { latched = streamLatchedOff; }
+            boolean freshReady = (nextMode == MAP_MODE_CARPLAY) && !latched && isAltScreenStreamReady();
             nextDisplayable = freshReady ? 3 : 33;
 
             // Swap dc[80] BEFORE committing the mode so the worker never rebinds with a stale dc[80];
@@ -496,6 +505,9 @@ public final class ScreenModule implements Module {
             clusterActive = false;
             streamReadyCached = false;
             streamReadyPolls = 0;
+            streamLatchedOff = false;
+            readyDrops = 0;
+            readyDropWindowStart = 0L;
             recomputeDesiredCtxLocked();
         }
         /* New session: CarPlay mode with the stream not yet ready => stock map (33) until it flips. */
@@ -535,6 +547,9 @@ public final class ScreenModule implements Module {
             clusterActive = false;
             streamReadyCached = false;
             streamReadyPolls = 0;
+            streamLatchedOff = false;
+            readyDrops = 0;
+            readyDropWindowStart = 0L;
         }
         publishClusterOwnershipState(CTX_STOCK_CLUSTER, false, false);
         republish();
@@ -565,20 +580,27 @@ public final class ScreenModule implements Module {
     }
 
     /** Fold one stream-ready poll sample into the cached flag.  Caller must hold LOCK.
-     *  true->false applies immediately; false->true needs two consecutive true polls. */
+     *  The signal is the sidecar's own first-present file, so it is applied immediately in both directions;
+     *  repeated losses latch the CarPlay map off for the connection (flap guard). */
     private static void applyStreamPollLocked(boolean ready) {
         boolean prev = streamReadyCached;
-        if (!ready) {
-            streamReadyPolls = 0;
-            streamReadyCached = false;
-        } else if (!prev) {
-            streamReadyPolls++;
-            if (streamReadyPolls >= 2) {
-                streamReadyCached = true;
-                streamReadyPolls = 0;
+        if (streamLatchedOff) ready = false;
+        streamReadyCached = ready;
+        streamReadyPolls = 0;
+        if (streamReadyCached == prev) return;
+        if (prev && !streamReadyCached && !streamLatchedOff) {
+            long now = System.currentTimeMillis();
+            if (now - readyDropWindowStart > READY_DROP_WINDOW_MS) {
+                readyDropWindowStart = now;
+                readyDrops = 0;
+            }
+            readyDrops++;
+            if (readyDrops >= READY_DROPS_BEFORE_LATCH) {
+                streamLatchedOff = true;
+                Log.w(TAG, "CarPlay map latched OFF for this connection: sidecar lost ready " + readyDrops
+                    + "x in " + (READY_DROP_WINDOW_MS / 1000L) + "s; staying on the stock Audi map");
             }
         }
-        if (streamReadyCached == prev) return;
         int prevDesired = desiredCtx;
         recomputeDesiredCtxLocked();
         Log.i(TAG, "CarPlay stream readiness " + prev + " -> " + streamReadyCached
@@ -616,7 +638,7 @@ public final class ScreenModule implements Module {
                             if (desiredCtx == CTX_CLUSTER)
                                 LOCK.wait(CONTEXT_RECONCILE_MS);
                             else if (connected && activeMapMode == MAP_MODE_CARPLAY)
-                                LOCK.wait(500L);
+                                LOCK.wait(CONTEXT_RECONCILE_MS);
                             else
                                 LOCK.wait();
                         } catch (InterruptedException e) { /* persistent worker */ }
@@ -764,20 +786,22 @@ public final class ScreenModule implements Module {
     private static final Object STATE_FILE_LOCK = new Object();
     private static final String CLUSTER_STATE_FILE = "/tmp/mmi-mirror-cluster-ownership.state";
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
-    private static final String MIRROR_ACTIVE_FILE = "/tmp/mmi-mirror-active";
+    /* Written by carplay-alt111-mirror-display only after its first successful present into displayable 3
+     * and deleted by start_vehicle.sh on every sidecar (re)start/stop: the one signal that the CarPlay map
+     * is really on screen.  It is NOT the supervisor demand file /tmp/mmi-mirror-active, which is raised
+     * before the sidecar even starts and would make Java select an empty displayable 3. */
+    private static final String BASE_READY_FILE = "/tmp/mmi-mirror-basevideo.ready";
 
     private static boolean clusterRenameWarned = false;   /* guarded by STATE_FILE_LOCK */
     private static boolean hmiRenameWarned = false;       /* guarded by STATE_FILE_LOCK */
 
     /**
-     * Checks whether the native AltScreen video stream supervisor has confirmed demand readiness:
-     * returns true iff /tmp/mmi-mirror-active exists (created by stream_supervisor.sh
-     * once the private111 stream marker is valid).
+     * True iff the AltScreen sidecar has actually presented a frame (see BASE_READY_FILE).
      * Does file I/O: never call while holding LOCK.
      */
     public static boolean isAltScreenStreamReady() {
         try {
-            return new java.io.File(MIRROR_ACTIVE_FILE).exists();
+            return new java.io.File(BASE_READY_FILE).exists();
         } catch (Throwable ignored) {
             return false;
         }

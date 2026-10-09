@@ -17,6 +17,15 @@ echo "=== Staging Unified CarPlay Release to $TARGET_DIR ==="
 
 mkdir -p "$TARGET_DIR/mod/carplay"
 
+# QNX /bin/sh chokes on CRLF; a Windows checkout (core.autocrlf) turns the .sh files into CRLF.
+# Strip CRs from scripts and JSON, copy everything else (binaries) untouched.
+copy_lf() {
+    case "$1" in
+        *.sh|*.json) tr -d '' < "$1" > "$2" ;;
+        *)           cp "$1" "$2" ;;
+    esac
+}
+
 # 1. Base M.I.B. control scripts
 cp "$PROJECT_DIR/install_MoreIncredibleBash/mod/custom.sh" "$TARGET_DIR/mod/"
 cp "$PROJECT_DIR/install_MoreIncredibleBash/mod/command.sh" "$TARGET_DIR/mod/"
@@ -25,7 +34,7 @@ cp "$PROJECT_DIR/install_MoreIncredibleBash/mod/command.sh" "$TARGET_DIR/mod/"
 for f in carplay_child.json carplay_startup.sh carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh; do
     src="$PROJECT_DIR/deploy/smartphone_integrator/$f"
     if [ -f "$src" ]; then
-        cp "$src" "$TARGET_DIR/mod/carplay/"
+        copy_lf "$src" "$TARGET_DIR/mod/carplay/$f"
     else
         echo "ERROR: Missing $src" >&2; exit 1
     fi
@@ -57,7 +66,7 @@ fi
 for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh libaltscreen_egl_fix.so; do
     src="$PROJECT_DIR/deploy/altscreen/$f"
     if [ -f "$src" ]; then
-        cp "$src" "$TARGET_DIR/mod/carplay/"
+        copy_lf "$src" "$TARGET_DIR/mod/carplay/$f"
     else
         echo "ERROR: Missing $src" >&2; exit 1
     fi

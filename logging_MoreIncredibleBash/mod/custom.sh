@@ -110,6 +110,32 @@ for f in /proc/boot/egl14.so /proc/boot/libEGL.so* /mnt/app/eso/lib/libdisplayin
     [ -f "$f" ] && cp "$f" "$OUT/bin/" 2>/dev/null
 done
 
+# ---- graphics stack for offline EGL/subdriver analysis (best effort, never fatal) ----
+mkdir "$OUT/gfx"
+run gfx_find.txt find /proc/boot /eso /mnt/app/eso /mnt/system/etc /etc \
+    -name 'eglsub-*' -o -name 'libGLES*' -o -name 'libscreen*' -o -name 'libEGL*' \
+    -o -name 'egl*.so*' -o -name 'graphics*.conf' -o -name 'egl*.conf' -o -name 'libdisplayinit*'
+run gfx_ls.txt ls -la /proc/boot /eso/lib /dev/screen /dev/screen/gpus
+while read -r f; do
+    [ -f "$f" ] || continue
+    # skip anything huge; unit graphics libs are well under 2 MB
+    sz=$(ls -l "$f" 2>/dev/null | awk '{print $5}')
+    [ "${sz:-0}" -lt 2097152 ] 2>/dev/null || continue
+    cp "$f" "$OUT/gfx/$(echo "$f" | tr '/' '_')" 2>/dev/null
+done < "$OUT/gfx_find.txt"
+# the boot script that launches the system (the reference starts its supervisor from here)
+for f in /mnt/system/etc/boot/startup.sh /etc/boot/startup.sh /etc/profile; do
+    [ -f "$f" ] && cp "$f" "$OUT/gfx/$(echo "$f" | tr '/' '_')" 2>/dev/null
+done
+
+# ---- process environments: what do working GL processes (screen, hmi, our renderer) run with? ----
+run env_pidin_env.txt pidin env
+run env_pidin_screen.txt pidin -p screen env
+run env_pidin_j9.txt pidin -p j9 env
+run env_pidin_dio.txt pidin -p dio_manager env
+run env_pidin_render.txt pidin -p maneuver_render env
+run env_self.txt env
+
 sync
 
 # ---- switch the full diagnostics on for the next CarPlay session ----
