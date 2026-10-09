@@ -66,7 +66,12 @@ fi
 for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh; do
     src="$PROJECT_DIR/deploy/altscreen/$f"
     if [ -f "$src" ]; then
-        if [ "$f" = "carplay-alt111-mirror-display" ] && [ "${ALT111_KEEP_LOGO:-0}" != "1" ]; then
+        if [ "$f" = "libcarplay_altscreen.so" ] && [ "${ALT111_KEEP_ZOOM_GATE:-0}" != "1" ]; then
+            # Personal build: let the wheel zoom work on an idle, route-less CarPlay map (see
+            # scripts/patch_altscreen_zoom.sh).  Only the staged copy is patched; set
+            # ALT111_KEEP_ZOOM_GATE=1 to stage the unmodified library.
+            sh "$SCRIPT_DIR/patch_altscreen_zoom.sh" "$src" "$TARGET_DIR/mod/carplay/$f" || true
+        elif [ "$f" = "carplay-alt111-mirror-display" ] && [ "${ALT111_KEEP_LOGO:-0}" != "1" ]; then
             # Personal build: skip the sidecar's embedded startup logo (see scripts/patch_altscreen_logo.sh).
             # The repo keeps the author's binary untouched; only the staged copy is patched.
             # Set ALT111_KEEP_LOGO=1 to stage the unmodified binary.  A non-matching build is staged
