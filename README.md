@@ -106,27 +106,56 @@ versions are untested. **Use at your own risk**; this is a fan project, not affi
 There is nothing to switch on: plug in the iPhone and CarPlay starts as usual; the cluster
 features below follow it automatically.
 
-- **The CarPlay map on the cluster (AltScreen).** As soon as the iPhone connects, the Virtual Cockpit
-  shows the live CarPlay map ([how it works](docs/altscreen.md)). If the CarPlay picture is not available
-  you simply keep the normal Audi map.
-- **Switch maps from the steering wheel.** Hold the left roller for 5 seconds to flip between the
-  CarPlay map and the Audi map; the turn arrows work on both.
-- **Turn-by-turn on the cluster.** During CarPlay navigation the Virtual Cockpit shows a 3D maneuver
-  arrow drawn over the map (the CarPlay map, or the Audi map in Audi mode). The arrow fills as the turn approaches and blinks just before it, lane arrows appear under
-  it, and the cluster also shows distance to the turn, arrival time and remaining distance. Needs an
-  app that sends CarPlay route guidance: Apple Maps and Google Maps do, AMap does with its CarPlay
-  guidance setting on, Waze does not
+### CarPlay on the Virtual Cockpit
+
+- **The full CarPlay map on the cluster (AltScreen).** As soon as the iPhone connects, the Virtual
+  Cockpit shows the live CarPlay map next to the speedometer (it takes 5-10 s to appear; until then you
+  keep the normal Audi map). [How it works](docs/altscreen.md).
+- **Switch maps from the steering wheel.** **Hold the left roller for 5 seconds** to flip between the
+  CarPlay map and the normal Audi map, and hold again to flip back. It works any time CarPlay is
+  connected (navigation or not), the turn arrows work on both maps, and every new connection starts
+  on the CarPlay map again.
+- **Safe fall-back.** The CarPlay map is only shown once its video is really on screen. If it is not
+  available, stops, or keeps failing, the cluster stays on (or returns to) the normal Audi map, so the
+  car is never left with a blank cluster. A failing video process backs off and gives up instead of
+  looping.
+- **No intro clip.** The AltScreen runtime's startup logo no longer plays before the first map frame
+  (documented one-byte patch applied to the packaged copy only, see
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)).
+
+### Turn-by-turn navigation (RGI)
+
+- **Turn arrows on the cluster.** During CarPlay navigation the Virtual Cockpit shows a 3D maneuver
+  arrow (on the CarPlay map, or on the Audi map in Audi mode) that fills as the turn approaches and
+  blinks just before it, with **lane arrows** under it. The cluster also shows distance to the turn,
+  arrival time and remaining distance. Needs an app that
+  sends CarPlay route guidance: Apple Maps and Google Maps do, AMap does with its CarPlay guidance
+  setting on, Waze does not
   ([details](docs/rgd/rgd-activation.md#-which-navigation-apps-send-route-guidance)).
-- **Route text in the Virtual Cockpit.** A text line names the exit sign or the next road (the
-  current road when there is nothing else); long names scroll. Press **OK** (the left steering-wheel
-  roller) to switch it to arrival time and time left, and press again to go back; it returns by itself
-  after 20 s ([details](docs/rgd/vc-route-text.md)).
+- **Route text in the Virtual Cockpit.** A text line names the exit sign or the next road (the current
+  road when there is nothing else); long names scroll ([details](docs/rgd/vc-route-text.md)).
+  **Click the left roller once** to switch it between the **next turn / street** and your **arrival time
+  (ETA) and time left**; it returns to the street by itself after 20 s.
 - **Head-up display.** The same maneuver icons, lane arrows and distance appear on the HUD.
-- **Steering-wheel roller** zooms the CarPlay map while navigating, and the stock map as without CarPlay in Audi mode.
+- **Scroll-wheel zoom.** Turning the left roller zooms the CarPlay map while you navigate (the iPhone
+  ignores zoom on an idle map), and the stock map as always in Audi mode.
+
+### And more
+
 - **Cover art on the cluster.** The now-playing album art shows on the cluster media screen.
 - **Parking popups no longer hide CarPlay.** When the Audi front PDC / parking view pops up beside it,
   CarPlay stays on screen instead of being replaced ([details](docs/hmi/pdc-small-stage.md)).
-- **MMI touchpad → DPAD bridging** so finger drags navigate CarPlay menus.
+- **MMI touchpad -> DPAD bridging** so finger drags navigate CarPlay menus.
+
+### Easy to install and to remove
+
+- **One ZIP, no tools.** Download it from the [Releases page](https://github.com/ntrambitas12/mib2q-carplay-rgi/releases/latest),
+  copy it onto the M.I.B. SD card and run one menu entry. Plain-English `READ ME FIRST.txt` included.
+- **Uninstall and log collection built in.** The `EXTRAS/` folder swaps in an uninstaller (restores the
+  two settings files the installer backed up) or a log collector that saves everything needed for a bug
+  report to the card.
+- **Safe installer.** It checks the whole release is on the card before writing anything, copies files
+  atomically, keeps a stock backup of each setting it edits and never stops processes or reboots.
 
 ## 🗂️ Repository layout
 
@@ -324,31 +353,3 @@ Thanks for the prior work and knowledge that helped figure this out.
 - https://github.com/EthanArbuckle/iPhone18-3_26.1_23B85_Restore
 - https://github.com/adi961/mib2-android-auto-vc
 - [@fifthBro](https://t.me/fifthBro)
-
----
-
-<sub>What are you doing all the way down here? There's nothing to see…</sub>
-
-<details>
-<summary>…or is there?</summary>
-
-<br>
-
-### Coming soon. Maybe. Someday. No promises.
-
-It was just the warm-up, next:
-
-<p align="center">
-  <img src="assets/coming-soon.jpg" width="70%" />
-</p>
-
-- **Multichannel audio support** - from stereo up to 6- or even 8-channel
-- **Apple Spatial Audio**
-- **Dolby Atmos** - High Quality 5.1.2 masters
-- **Video playback** - an Apple TV on wheels
-
-Stay tuned. 👀
-
-</details>
-
----
