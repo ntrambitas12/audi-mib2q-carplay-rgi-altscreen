@@ -801,11 +801,23 @@ public final class ScreenModule implements Module {
                 fos.write(bytes);
                 fos.flush();
                 fos.close();
-                if (!tmp.renameTo(target) && !clusterRenameWarned) {
-                    clusterRenameWarned = true;
-                    Log.w(TAG, "cluster ownership state rename failed: " + CLUSTER_STATE_FILE);
+                if (target.exists()) {
+                    target.delete();
                 }
-            } catch (Throwable ignored) {}
+                if (!tmp.renameTo(target)) {
+                    // Fallback if filesystem rename fails: write directly to target
+                    java.io.FileOutputStream fosTarget = new java.io.FileOutputStream(target);
+                    fosTarget.write(bytes);
+                    fosTarget.flush();
+                    fosTarget.close();
+                    tmp.delete();
+                }
+            } catch (Throwable t) {
+                if (!clusterRenameWarned) {
+                    clusterRenameWarned = true;
+                    Log.w(TAG, "cluster ownership state write failed: " + CLUSTER_STATE_FILE + " (" + t.getMessage() + ")");
+                }
+            }
         }
     }
 
@@ -826,11 +838,22 @@ public final class ScreenModule implements Module {
                 fos.write(bytes);
                 fos.flush();
                 fos.close();
-                if (!tmp.renameTo(target) && !hmiRenameWarned) {
-                    hmiRenameWarned = true;
-                    Log.w(TAG, "hmi state rename failed: " + HMI_STATE_FILE);
+                if (target.exists()) {
+                    target.delete();
                 }
-            } catch (Throwable ignored) {}
+                if (!tmp.renameTo(target)) {
+                    java.io.FileOutputStream fosTarget = new java.io.FileOutputStream(target);
+                    fosTarget.write(bytes);
+                    fosTarget.flush();
+                    fosTarget.close();
+                    tmp.delete();
+                }
+            } catch (Throwable t) {
+                if (!hmiRenameWarned) {
+                    hmiRenameWarned = true;
+                    Log.w(TAG, "hmi state write failed: " + HMI_STATE_FILE + " (" + t.getMessage() + ")");
+                }
+            }
         }
     }
 }

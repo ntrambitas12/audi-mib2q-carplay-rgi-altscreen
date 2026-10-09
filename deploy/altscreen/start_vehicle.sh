@@ -9,7 +9,11 @@ export PATH
 # Only publish the QNX loader path on a real target. This keeps host-side
 # fixtures usable while production MHI2Q launches remain deterministic.
 if [ -d /proc/boot ] && [ -d /mnt/app ]; then
-  LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
+  # Prepend /mnt/app/eso/lib so Qualcomm's egliLoadLibrary can find libGLESv2.so.1.
+  # libdisplayinit.so lives there and links libGLESv2.so.1 successfully; egl14.so's
+  # egliLoadLibrary does a short-name dlopen("libGLESv2") which requires the .so.1
+  # to be found via LD_LIBRARY_PATH before eglCreateContext is called.
+  LD_LIBRARY_PATH=/mnt/app/eso/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}:/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
   export LD_LIBRARY_PATH
 fi
 
@@ -206,7 +210,17 @@ schedule_abnormal_restart() {
 
 # Deliberately do not inherit the CarPlay/dio_manager preload into the sidecar.
 # Direct-display consumes SHM only and does not need any Window58 ID bridge.
-LD_PRELOAD= "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
+# On Qualcomm Adreno 320 (MHI2Q), egl14.so requires an active QNX Screen context
+# before eglGetDisplay is called, else it crashes with SIGSEGV in qeglDrvAPI_eglGetError.
+# Preload libaltscreen_egl_fix.so to guarantee an active Screen context.
+EGL_FIX="$ROOT/libaltscreen_egl_fix.so"
+[ -f "$EGL_FIX" ] || EGL_FIX="/mnt/app/root/carplay-altscreen/bin/mirror/libaltscreen_egl_fix.so"
+[ -f "$EGL_FIX" ] || EGL_FIX="/mnt/app/root/carplay-altscreen/lib/libaltscreen_egl_fix.so"
+if [ -f "$EGL_FIX" ]; then
+  LD_PRELOAD="$EGL_FIX" "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
+else
+  LD_PRELOAD= "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
+fi
 PID=$!
 echo "$PID" > "$PIDFILE"
 

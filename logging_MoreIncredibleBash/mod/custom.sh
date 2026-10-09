@@ -77,7 +77,7 @@ run ifconfig.txt ifconfig -a
 run netstat_rn.txt netstat -rn
 run sloginfo_mmx.txt sloginfo
 run sloginfo_rcc.txt on -f rcc sloginfo
-run hooks_ls.txt ls -la /mnt/app/root/hooks /mnt/app/eso/hmi/lsd/jars /mnt/app/eso/bin/apps/smartphone_integrator
+run hooks_ls.txt ls -la /mnt/app/root/hooks /mnt/app/eso/hmi/lsd/jars /mnt/app/eso/bin/apps/smartphone_integrator /mnt/app/root/carplay-altscreen/bin/mirror /mnt/app/root/carplay-altscreen/lib
 run carplay_stock_ls.txt find /mnt/app /mnt/system -name '*.carplay-stock'
 run tmp_ls.txt ls -la "$SRC"
 run cores_ls.txt ls -la /mnt/ota/system/core
@@ -100,8 +100,14 @@ done
 # ---- crash dumps of our processes (dumper writes them to /mnt/ota/system/core) ----
 mkdir "$OUT/core"
 for f in /mnt/ota/system/core/dio_manager* /mnt/ota/system/core/maneuver_render* \
-         /mnt/ota/system/core/smartphone_integrator*; do
+         /mnt/ota/system/core/smartphone_integrator* /mnt/ota/system/core/carplay-alt111*; do
     [ -f "$f" ] && cp "$f" "$OUT/core/" 2>/dev/null
+done
+
+# ---- system graphics libraries for offline symbol inspection ----
+mkdir "$OUT/bin"
+for f in /proc/boot/egl14.so /proc/boot/libEGL.so* /mnt/app/eso/lib/libdisplayinit.so; do
+    [ -f "$f" ] && cp "$f" "$OUT/bin/" 2>/dev/null
 done
 
 sync
