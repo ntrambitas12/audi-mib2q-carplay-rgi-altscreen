@@ -9,6 +9,8 @@ your M.I.B. SD card, and follow `READ ME FIRST.txt`.** No computer skills needed
   and on the head-up display.
 - **Hold the left steering-wheel roller for 5 seconds** to switch between the CarPlay map and the Audi
   map (the turn arrows work on both).
+- **Click the left roller once** while navigating to switch the route text between the **next turn / street**
+  and your **arrival time (ETA)**; it goes back by itself after about 20 seconds.
 - Safe fall-back: if the CarPlay picture is not available you simply keep the normal Audi map.
 - Uninstall and log-collection tools in `EXTRAS/` (no computer needed beyond copying one folder).
 

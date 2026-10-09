@@ -40,7 +40,7 @@ versions are untested. **Use at your own risk**; this is a fan project, not affi
 | Plug in the iPhone | The cluster starts on the normal Audi map, then switches to the CarPlay map after 5-10 s |
 | Start navigation in Apple Maps / Google Maps | Turn arrows, lane guidance and distance appear near each turn, on the CarPlay map |
 | **Hold the left roller 5 s** | Switches between the CarPlay map and the Audi map (arrows work on both). Hold again to switch back |
-| Short press of the left roller | Switches the route text line between the next road and arrival time |
+| **Click the left roller once** (while navigating) | Switches the route text line between the **next turn / street** and your **arrival time (ETA)**; returns to the street by itself after about 20 s |
 | Unplug the phone | Back to the stock cluster; the next connection starts on the CarPlay map again |
 
 ### Known limits

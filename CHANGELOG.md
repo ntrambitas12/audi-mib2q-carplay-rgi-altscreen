@@ -9,6 +9,7 @@ working together on a real car (MHI2Q US firmware AUG22, P5087).
 - CarPlay map on the cluster as soon as the iPhone connects (AltScreen by yuedizhibo and Lanye-z).
 - **Hold the left steering-wheel roller for 5 s** to switch between the CarPlay map and the Audi map;
   works whenever CarPlay is connected, resets to the CarPlay map on every new connection.
+- Documented: a single click of the left roller toggles the cluster route text between the next turn and the ETA.
 - Two fixed cluster contexts: 80 (CarPlay map + arrows) and 81 (Audi map + arrows); no runtime edits
   of the display table, no visible flicker when switching.
 - Safe fall-back to the Audi map when the CarPlay picture is not available: Java shows the CarPlay map

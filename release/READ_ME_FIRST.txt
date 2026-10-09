@@ -13,6 +13,8 @@ WHAT YOU GET
  * Hold the LEFT steering-wheel roller for 5 seconds to switch between
    the CarPlay map and the normal Audi map. Hold again to switch back.
    The turn arrows work on both maps.
+ * Click the left roller ONCE while navigating to see your arrival time
+   (ETA) instead of the next turn; click again to go back.
 
 This is a fan project. It is NOT made by Audi or Apple.
 USE AT YOUR OWN RISK. It changes software on your car's infotainment
@@ -100,8 +102,11 @@ USING IT
    to confirm) for 5 seconds while CarPlay is connected. The
    instrument cluster changes between the CarPlay map and the Audi map.
    It always starts on the CarPlay map after you plug the phone in.
- * Short press of the same roller: switches the little route text line
-   between the next road and your arrival time.
+ * Press the same roller ONCE (a quick click) while navigating: the
+   route text line on the cluster switches between the NEXT TURN /
+   street name and your ARRIVAL TIME (ETA). It goes back to the street
+   name by itself after about 20 seconds. Click again to switch
+   manually.
  * Zooming the map with the roller only works while you are navigating
    (the iPhone ignores zoom on an idle map).
 
