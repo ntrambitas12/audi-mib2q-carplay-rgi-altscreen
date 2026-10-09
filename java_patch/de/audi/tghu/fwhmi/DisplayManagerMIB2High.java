@@ -31,16 +31,15 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
     private static final int CTX_BLANK       = 75;   // empty
     private static final int CTX_MAP_ALT     = 76;   // alt map only
     private static final int CTX_MAP_ALT_KDK = 77;   // alt map + KDK + backings
-    private static final int CTX_CARPLAY_NAV = 80;   // CarPlay: maneuver + backing + stock native map
+    private static final int CTX_CARPLAY_NAV = 80;   // CarPlay: maneuver + backing + CarPlay AltScreen video (displayable 3)
+    private static final int CTX_CARPLAY_NAV_AUDI = 81;   // same RGI planes over the stock native map (displayable 33)
     private static final int FIRST_CARPLAY_CONTEXT = 80;   // every stock context id is < this
 
     /* ---- context-table sizing / G24 KDK variants ---- */
-    private static final int DC_SIZE_A5  = 82;    // stock 0..78 + CarPlay 80
+    private static final int DC_SIZE_A5  = 82;    // stock 0..78 + CarPlay 80 / 81
     private static final int DC_SIZE_G24 = 158;   // stock + the +79 KDK-hoisted variants
     private static final int G24_KDK_CTX_OFFSET = 79;
 
-    private static volatile DisplayManagerMIB2High activeInstance = null;
-    private static volatile int currentCarPlayBaseDisplayable = 3;
     private int lastBlockedCarPlayContext = -1;
 
     public DisplayManagerMIB2High(IFrameworkAccess iframeworkaccess) {
@@ -60,7 +59,7 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
         return i;
     }
 
-    protected synchronized void defineContexts() {
+    protected void defineContexts() {
         if (this.framework.getKombiType() == KOMBI_TYPE_G24) {
             this.dc = new DisplayContext[DC_SIZE_G24];
         } else {
@@ -178,7 +177,8 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
          *   Image backings, so we reuse those.  Plane geometry lives in ClusterLayerController; the
          *   74<->80 switch is driven by ScreenModule (no-nav state is plain stock ctx 74). */
         if (this.framework.getKombiType() != KOMBI_TYPE_G24) {
-            this.dc[CTX_CARPLAY_NAV] = new DisplayContext(CTX_CARPLAY_NAV, new int[]{98, 101, 102, currentCarPlayBaseDisplayable});
+            this.dc[CTX_CARPLAY_NAV] = new DisplayContext(CTX_CARPLAY_NAV, new int[]{98, 101, 102, 3});
+            this.dc[CTX_CARPLAY_NAV_AUDI] = new DisplayContext(CTX_CARPLAY_NAV_AUDI, new int[]{98, 101, 102, 33});
         } else {
             this.defineContextsForG24();
         }
@@ -192,27 +192,7 @@ public class DisplayManagerMIB2High extends DisplayManager implements IDisplayLi
             "cluster platform: kombiType=" + this.framework.getKombiType()
             + " sysConst(541)=" + this.framework.getSysConst(SYSCONST_KOMBI_VARIANT)
             + " carplayCtx=" + (this.dc[CTX_CARPLAY_NAV] != null)
-            + " baseMapDisplayable=" + currentCarPlayBaseDisplayable);
-        activeInstance = this;
-    }
-
-    /**
-     * Dynamically updates the base map displayable in Context 80:
-     * 3 = CarPlay AltScreen live video (default)
-     * 33 = Stock Audi onboard navigation map (secondary backup)
-     */
-    public static void setCarPlayMapDisplayable(int displayable) {
-        currentCarPlayBaseDisplayable = displayable;
-        DisplayManagerMIB2High dm = activeInstance;
-        if (dm != null && dm.framework != null && dm.framework.getKombiType() != KOMBI_TYPE_G24) {
-            synchronized (dm) {
-                if (dm.dc != null && dm.dc.length > CTX_CARPLAY_NAV) {
-                    dm.dc[CTX_CARPLAY_NAV] = new DisplayContext(CTX_CARPLAY_NAV, new int[]{98, 101, 102, displayable});
-                    com.luka.carplay.framework.Log.i("DisplayManager",
-                        "Context 80 updated: base map displayable=" + displayable);
-                }
-            }
-        }
+            + " audiMapCtx=" + (this.dc[CTX_CARPLAY_NAV_AUDI] != null));
     }
 
     /** G24 has no separate KDK layer, so every stock context gets a "+79" twin with the KDK

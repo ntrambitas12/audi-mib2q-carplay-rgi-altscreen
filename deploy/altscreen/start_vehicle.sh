@@ -19,10 +19,10 @@ fi
 
 # Graphics environment of the system's own GL processes (screen, j9), as captured on the unit
 # (carplay_logs/011 env_pidin_*.txt).  Qualcomm's egl14.so reads graphics.conf from $GRAPHICS_ROOT; without
-# it the EGL init takes its "default SubDriver" path, whose OpenSubDriver() crashes - the bug the old
-# libaltscreen_egl_fix.so worked around with a strcmp hack, after which eglCreateContext failed with
-# EGL_BAD_ALLOC.  maneuver_render only works because carplay_monitor.sh sets GRAPHICS_ROOT for it; this
-# script is started from the same monitor and inherits dio_manager's environment, which has none of these.
+# it the EGL init takes its "default SubDriver" path, whose OpenSubDriver() crashes (and a workaround for
+# that crash only trades it for an EGL_BAD_ALLOC in eglCreateContext).  maneuver_render only works because
+# carplay_monitor.sh sets GRAPHICS_ROOT for it; this script is started from the same monitor and inherits
+# dio_manager's environment, which has none of these.
 if [ -d /proc/boot ] && [ -d /mnt/app ]; then
   GRAPHICS_ROOT=${GRAPHICS_ROOT:-/proc/boot/}
   QC_GFX_CONF_DIR=${QC_GFX_CONF_DIR:-/mnt/app/navigation}
@@ -150,10 +150,10 @@ else
 fi
 
 {
-  echo "MIRROR_LAUNCH_ENV=READY pid=$ bin=$BIN volatile_mode=$VOLATILE_MODE restart_reason=${RESTART_REASON:-NONE} restart_count=$RESTART_COUNT max_abnormal_restarts=$MAX_ABNORMAL_RESTARTS recover_current_session=$RECOVER_CURRENT_SESSION"
+  echo "MIRROR_LAUNCH_ENV=READY pid=$$ bin=$BIN volatile_mode=$VOLATILE_MODE restart_reason=${RESTART_REASON:-NONE} restart_count=$RESTART_COUNT max_abnormal_restarts=$MAX_ABNORMAL_RESTARTS recover_current_session=$RECOVER_CURRENT_SESSION"
   echo "PATH=$PATH"
   echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
-  echo "GFX_ENV GRAPHICS_ROOT=${GRAPHICS_ROOT:-<unset>} QC_GFX_CONF_DIR=${QC_GFX_CONF_DIR:-<unset>} ADRENO=${ADRENO:-<unset>} DISPLAY_CATALOG_PATH=${DISPLAY_CATALOG_PATH:-<unset>} IPL_CONFIG_DIR=${IPL_CONFIG_DIR:-<unset>} egl_fix_shim=${ALT111_USE_EGL_FIX:-0}"
+  echo "GFX_ENV GRAPHICS_ROOT=${GRAPHICS_ROOT:-<unset>} QC_GFX_CONF_DIR=${QC_GFX_CONF_DIR:-<unset>} ADRENO=${ADRENO:-<unset>} DISPLAY_CATALOG_PATH=${DISPLAY_CATALOG_PATH:-<unset>} IPL_CONFIG_DIR=${IPL_CONFIG_DIR:-<unset>}"
   echo "HOOK_LOG=$HOOK_LOG"
   echo "GATE_TOKEN=$GATE_TOKEN"
   echo "SCREEN_CONTEXT_POLICY=JAVA80_ONLY native_context_writer=0"
@@ -226,19 +226,7 @@ schedule_abnormal_restart() {
 
 # Deliberately do not inherit the CarPlay/dio_manager preload into the sidecar.
 # Direct-display consumes SHM only and does not need any Window58 ID bridge.
-# On Qualcomm Adreno 320 (MHI2Q), egl14.so requires an active QNX Screen context
-# before eglGetDisplay is called, else it crashes with SIGSEGV in qeglDrvAPI_eglGetError.
-# Preload libaltscreen_egl_fix.so to guarantee an active Screen context.
-EGL_FIX="$ROOT/libaltscreen_egl_fix.so"
-[ -f "$EGL_FIX" ] || EGL_FIX="/mnt/app/root/carplay-altscreen/bin/mirror/libaltscreen_egl_fix.so"
-[ -f "$EGL_FIX" ] || EGL_FIX="/mnt/app/root/carplay-altscreen/lib/libaltscreen_egl_fix.so"
-# The shim is a workaround for running WITHOUT the graphics environment above; with it the stock EGL
-# stack works unmodified, so the shim is opt-in (ALT111_USE_EGL_FIX=1) for experiments only.
-if [ "${ALT111_USE_EGL_FIX:-0}" = "1" ] && [ -f "$EGL_FIX" ]; then
-  LD_PRELOAD="$EGL_FIX" "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
-else
-  LD_PRELOAD= "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
-fi
+LD_PRELOAD= "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
 

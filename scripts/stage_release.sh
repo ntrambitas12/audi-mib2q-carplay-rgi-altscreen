@@ -63,7 +63,7 @@ else
 fi
 
 # 5. AltScreen sidecar & libraries
-for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh libaltscreen_egl_fix.so; do
+for f in libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh; do
     src="$PROJECT_DIR/deploy/altscreen/$f"
     if [ -f "$src" ]; then
         copy_lf "$src" "$TARGET_DIR/mod/carplay/$f"

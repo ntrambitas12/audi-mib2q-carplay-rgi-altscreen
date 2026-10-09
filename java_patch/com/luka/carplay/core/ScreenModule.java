@@ -1,21 +1,24 @@
 /*
  * ScreenModule — instrument-cluster (LVDS2 / terminal 1) CONTEXT MANAGER.
  *
- * Owns the CarPlay cluster context and selects between exactly two contexts:
+ * Owns the CarPlay cluster contexts and selects between three, all declared at init:
  *
- *   dc[80] = {98 maneuver, 101/102 KDK backing, 33 stock native map}   — nav active
- *   dc[74] = stock cluster                                             — otherwise
+ *   dc[80] = {98 maneuver, 101/102 KDK backing, 3  CarPlay AltScreen video}  - CarPlay map on screen
+ *   dc[81] = {98 maneuver, 101/102 KDK backing, 33 stock native map}          - Audi map + RGI overlay
+ *   dc[74] = stock cluster                                                    - otherwise
  *
- * The maneuver overlay (displayable 98, maneuver_render, transparent when idle)
- * composites over the head unit's OWN native map (displayable 33); there is no
- * CarPlay video plane on the cluster.  Every new CarPlay session leaves the cluster
- * on stock (74); we switch to ctx 80 once RouteGuidance has started the RGI
- * presentation through BAP (setNavActive(true)), and drop back to 74 once VC withdraws KDK visibility (Fct44)
- * after guidance ends, and on disconnect.
+ * The maneuver overlay (displayable 98, maneuver_render, transparent when idle) and the KDK backings
+ * ride on top of either map, so the RGI works in both 80 and 81.  Which map is shown is a real
+ * context change (80 <-> 81); the context tables are never edited at runtime because they are
+ * declared to the native compositor once, at init, in DisplayManagerMIB2High.
+ * getMappedInternalContext is identity on MIB2High, so switchContext(n) lands on exactly the
+ * declared context n.
  *
- * The context tables (dc[80]) are declared to the native compositor at init in
- * DisplayManagerMIB2High; getMappedInternalContext is identity on MIB2High, so
- * switchContext(80) lands on exactly that declared context.
+ * Every new CarPlay session leaves the cluster on stock (74).  In CarPlay map mode we take ctx 80 as
+ * soon as the sidecar has really presented a frame (/tmp/mmi-mirror-basevideo.ready); a turn approach
+ * before that (or in Audi map mode) uses ctx 81.  We drop back to 74 once VC withdraws KDK visibility
+ * (Fct44) after guidance ends, and on disconnect.  A 5 s hold of the left roller flips between the
+ * CarPlay map mode and the Audi map mode while a CarPlay session is connected.
  *
  * There is exactly ONE persistent worker for the module lifetime and it is the SOLE
  * caller of DisplayManager.switchContext/setUpdateRate.  Single writer => two
@@ -35,8 +38,10 @@ public final class ScreenModule implements Module {
     private static final String TAG = "Screen";
 
     public static final int TERMINAL_CLUSTER  = 1;    /* LVDS2 */
-    public static final int CTX_CLUSTER       = 80;   /* nav active: {98 maneuver, 101/102 backing, 33 stock map} */
+    public static final int CTX_CLUSTER       = 80;   /* CarPlay AltScreen: {98 maneuver, 101/102 backing, 3 CarPlay video} */
+    public static final int CTX_CLUSTER_AUDI  = 81;   /* Audi map + RGI:    {98 maneuver, 101/102 backing, 33 stock map} */
     public static final int CTX_STOCK_CLUSTER = 74;
+    private static boolean isClusterCtx(int c) { return c == CTX_CLUSTER || c == CTX_CLUSTER_AUDI; }
     private static final int CTX_BOUNCE       = 72;   /* kombi map — never ours; forces a real ctx change */
     private static final int BOUNCE_SLEEP_MS  = 180;  /* preContextSwitchHook settle (proven driver) */
     private static final long CONTEXT_RECONCILE_MS = 250L;
@@ -78,10 +83,11 @@ public final class ScreenModule implements Module {
      * desiredCtx truth table:
      *   !connected                                                          -> 74 (stock)
      *   connected, routeActive=1, presentationActive=0 (cruising)           -> 74 (stock cluster: speedometer opening closed)
-     *   connected, routeActive=1, presentationActive=1 (approaching turn)   -> 80 (CarPlay cluster composition)
+     *   connected, routeActive=1, presentationActive=1 (approaching turn)   -> 80 (CarPlay map ready) / 81 (Audi map)
      *   connected, routeActive=1, presentationActive=0 (approach exit)      -> 74 (immediate drop to stock cluster)
-     *   connected, routeActive=0, navHidePending=1 (route end, KDK visible) -> 80 (hold until Fct44 withdrawal)
-     *   connected, routeActive=0, navHidePending=0 (route end, KDK hidden)  -> 74 (stock cluster) */
+     *   connected, routeActive=0, navHidePending=1 (route end, KDK visible) -> 80/81 (hold until Fct44 withdrawal)
+     *   connected, routeActive=0, navHidePending=0 (route end, KDK hidden)  -> 74 (stock cluster)
+     *   connected, CarPlay map mode, sidecar presenting (any nav state)     -> 80 */
     private static int desiredCtx = CTX_STOCK_CLUSTER;
     private static int currentCtx = -1;
     private static volatile boolean connected = false;
@@ -146,11 +152,8 @@ public final class ScreenModule implements Module {
         cycleMapMode();
     }
 
-    /* Serialises whole cycleMapMode calls and the worker's displayable sync.  Lock order:
-     * CYCLE_LOCK -> LOCK; the DisplayManager monitor is only ever taken with LOCK released. */
-    private static final Object CYCLE_LOCK = new Object();
     private static volatile boolean streamReadyCached = false;  /* worker poll only; read under LOCK */
-    private static int streamReadyPolls = 0;                    /* consecutive true polls (guarded by LOCK) */
+    private static int streamReadyPolls = 0;                    /* poll bookkeeping (guarded by LOCK) */
     /* Flap guard (guarded by LOCK): if the sidecar keeps losing "ready" (crash loop), stop offering the CarPlay
      * map for the rest of this phone connection and stay on the stock Audi map, which is the RGI-safe state. */
     private static final int READY_DROPS_BEFORE_LATCH = 3;
@@ -158,63 +161,41 @@ public final class ScreenModule implements Module {
     private static boolean streamLatchedOff = false;
     private static int readyDrops = 0;
     private static long readyDropWindowStart = 0L;
-    private static volatile int lastAppliedBaseDisplayable = -1;
+    /* true only while ctx 80 (the CarPlay AltScreen composition) is the applied cluster context. */
+    private static volatile boolean altScreenShowing = false;
 
+    /** True while the CarPlay AltScreen map is actually on the cluster (ctx 80 applied). */
+    public static boolean isAltScreenShowing() { return altScreenShowing; }
+
+    /** Flip between the CarPlay map mode and the Audi map mode.  Only meaningful while a CarPlay
+     *  session is connected.  Both maps are already-declared contexts (80 / 81), so this is a plain
+     *  context change decided by recomputeDesiredCtxLocked(); nothing is edited at runtime. */
     public static void cycleMapMode() {
-        int currentDesired;
-        boolean isOwned;
-        boolean session;
-        synchronized (CYCLE_LOCK) {
-            int nextMode;
-            int nextDisplayable;
-            synchronized (LOCK) {
-                nextMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
+        /* One fresh look at the sidecar when entering CarPlay mode: Audi mode does not poll, so the
+         * cached flag may be stale.  File I/O, hence outside LOCK. */
+        boolean fresh = isAltScreenStreamReady();
+        synchronized (LOCK) {
+            if (!connected) return;
+            int nextMode = (activeMapMode == MAP_MODE_CARPLAY) ? MAP_MODE_AUDI_BACKUP : MAP_MODE_CARPLAY;
+            if (nextMode == MAP_MODE_CARPLAY) {
+                streamReadyCached = fresh && !streamLatchedOff;
+                streamReadyPolls = 0;
             }
-            // Stream is not polled in Audi mode, so the cache may be stale on entry to CarPlay: take one fresh
-            // read here (file I/O, so inside CYCLE_LOCK but outside LOCK). Audi mode always uses 33.
-            boolean latched;
-            synchronized (LOCK) { latched = streamLatchedOff; }
-            boolean freshReady = (nextMode == MAP_MODE_CARPLAY) && !latched && isAltScreenStreamReady();
-            nextDisplayable = freshReady ? 3 : 33;
-
-            // Swap dc[80] BEFORE committing the mode so the worker never rebinds with a stale dc[80];
-            // done outside ScreenModule.LOCK to avoid holding LOCK while acquiring the DM monitor.
-            de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(nextDisplayable);
-            lastAppliedBaseDisplayable = nextDisplayable;
-
-            synchronized (LOCK) {
-                activeMapMode = nextMode;
-                if (nextMode == MAP_MODE_CARPLAY) {
-                    // Fresh read, no debounce needed: keeps recomputeDesiredCtxLocked consistent with dc[80].
-                    streamReadyCached = freshReady;
-                    streamReadyPolls = 0;
-                }
-                Log.i(TAG, "Map mode cycled -> " + (activeMapMode == MAP_MODE_CARPLAY ? "CARPLAY (default)" : "AUDI_BACKUP (stock Audi map)"));
-                recomputeDesiredCtxLocked();
-                if (desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER) {
-                    rebindPending = true;
-                    rebindReason = "map-mode-cycle";
-                    Log.i(TAG, "rebindPending set (reason=" + rebindReason + ")");
-                }
-                currentDesired = desiredCtx;
-                isOwned = clusterActive;
-                session = connected;
-                LOCK.notifyAll();
-            }
+            activeMapMode = nextMode;
+            Log.i(TAG, "Map mode cycled -> " + (nextMode == MAP_MODE_CARPLAY
+                ? "CARPLAY (alt screen, ready=" + streamReadyCached + ")" : "AUDI_BACKUP (stock Audi map)"));
+            recomputeDesiredCtxLocked();
+            LOCK.notifyAll();
         }
-        publishClusterOwnershipState(currentDesired, isOwned, session);
     }
 
     /**
      * Called when CarPlay session deactivates: resets active map mode to CarPlay so the NEXT
      * phone connection starts on the CarPlay second screen.
-     * Lock order: CYCLE_LOCK -> LOCK. Never calls into DisplayManager while holding LOCK.
      */
     public static void onCarPlayDisconnected() {
-        synchronized (CYCLE_LOCK) {
-            synchronized (LOCK) {
-                activeMapMode = MAP_MODE_CARPLAY;
-            }
+        synchronized (LOCK) {
+            activeMapMode = MAP_MODE_CARPLAY;
         }
         Log.i(TAG, "CarPlay disconnected: reset activeMapMode -> CARPLAY");
     }
@@ -224,15 +205,14 @@ public final class ScreenModule implements Module {
         navActive = (routeActive && presentationActive) || navHidePending;
         if (!connected) {
             desiredCtx = CTX_STOCK_CLUSTER;
-        } else if (activeMapMode == MAP_MODE_CARPLAY) {
-            // In CarPlay mode: take CTX_CLUSTER continuously when the stream is ready (cruising & navigating)
-            // or during active turn maneuvers. If stream is not ready, safely fall back to stock cluster (74).
-            // streamReadyCached is refreshed only by the worker poll (file I/O must never run under LOCK).
-            boolean streamReady = streamReadyCached;
-            desiredCtx = (streamReady || navActive) ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+        } else if (activeMapMode == MAP_MODE_CARPLAY && streamReadyCached) {
+            /* The sidecar is presenting: the CarPlay map owns the cluster all the time (cruising and
+             * navigating); the RGI planes in ctx 80 ride on top of it. */
+            desiredCtx = CTX_CLUSTER;
         } else {
-            // In Audi backup mode: cruising stays on stock cluster 74; turn approaches take CTX_CLUSTER (80)
-            desiredCtx = navActive ? CTX_CLUSTER : CTX_STOCK_CLUSTER;
+            /* Audi map mode, or CarPlay mode while the sidecar is not (yet) presenting: stock cluster
+             * while cruising, Audi map + RGI overlay (ctx 81) during a turn approach. */
+            desiredCtx = navActive ? CTX_CLUSTER_AUDI : CTX_STOCK_CLUSTER;
         }
         if (desiredCtx != prev) {
             String why;
@@ -261,7 +241,7 @@ public final class ScreenModule implements Module {
         boolean switchPending;
         synchronized (LOCK) {
             if (!active) {
-                boolean wasActive = navActive || (desiredCtx == CTX_CLUSTER);
+                boolean wasActive = navActive;
                 navHidePending = wasActive
                     && com.luka.carplay.cluster.ClusterLayerController.isKdkVisible();
                 routeActive = false;
@@ -503,17 +483,13 @@ public final class ScreenModule implements Module {
             navHidePending = false;
             rgdActive = false;
             clusterActive = false;
+            altScreenShowing = false;
             streamReadyCached = false;
             streamReadyPolls = 0;
             streamLatchedOff = false;
             readyDrops = 0;
             readyDropWindowStart = 0L;
             recomputeDesiredCtxLocked();
-        }
-        /* New session: CarPlay mode with the stream not yet ready => stock map (33) until it flips. */
-        synchronized (CYCLE_LOCK) {
-            de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(33);
-            lastAppliedBaseDisplayable = 33;
         }
         synchronized (LOCK) {
             /* Create the single persistent worker once; recreate only if it never started or died.
@@ -545,6 +521,7 @@ public final class ScreenModule implements Module {
             rebindPending = false;
             rebindReason = "";
             clusterActive = false;
+            altScreenShowing = false;
             streamReadyCached = false;
             streamReadyPolls = 0;
             streamLatchedOff = false;
@@ -558,26 +535,6 @@ public final class ScreenModule implements Module {
     /* ============================================================
      * Switch worker — the single serialized DM writer.
      * ============================================================ */
-
-    /** Effective base displayable for dc[80].  Caller must hold LOCK.
-     *  CarPlay mode: 3 only while the stream is ready, else the stock map (33).  Audi mode: always 33. */
-    private static int effectiveBaseDisplayableLocked() {
-        return (activeMapMode == MAP_MODE_CARPLAY && streamReadyCached) ? 3 : 33;
-    }
-
-    /** Swap dc[80] to the current effective base displayable if it differs from what was last applied.
-     *  Takes CYCLE_LOCK (so it cannot interleave with cycleMapMode's swap+commit), then LOCK briefly
-     *  to read state; the DisplayManager monitor is only taken with LOCK released.  Caller must NOT hold LOCK. */
-    private static void syncBaseDisplayable() {
-        synchronized (CYCLE_LOCK) {
-            int eff;
-            synchronized (LOCK) { eff = effectiveBaseDisplayableLocked(); }
-            if (eff != lastAppliedBaseDisplayable) {
-                de.audi.tghu.fwhmi.DisplayManagerMIB2High.setCarPlayMapDisplayable(eff);
-                lastAppliedBaseDisplayable = eff;
-            }
-        }
-    }
 
     /** Fold one stream-ready poll sample into the cached flag.  Caller must hold LOCK.
      *  The signal is the sidecar's own first-present file, so it is applied immediately in both directions;
@@ -605,13 +562,6 @@ public final class ScreenModule implements Module {
         recomputeDesiredCtxLocked();
         Log.i(TAG, "CarPlay stream readiness " + prev + " -> " + streamReadyCached
             + " desiredCtx " + prevDesired + " -> " + desiredCtx);
-        /* On ctx 80 already: only a rebind makes the compositor re-read the swapped dc[80]. */
-        if (desiredCtx == prevDesired && desiredCtx == CTX_CLUSTER && currentCtx == CTX_CLUSTER
-                && activeMapMode == MAP_MODE_CARPLAY) {
-            rebindPending = true;
-            rebindReason = "stream-ready-change";
-            Log.i(TAG, "rebindPending set (reason=" + rebindReason + ")");
-        }
     }
 
     private void switchLoop() {
@@ -629,13 +579,13 @@ public final class ScreenModule implements Module {
                     havePoll = false;
                     if (connected && activeMapMode == MAP_MODE_CARPLAY) applyStreamPollLocked(polled);
                 }
-                if (desiredCtx == CTX_CLUSTER && rebindPending) {
+                if (isClusterCtx(desiredCtx) && rebindPending) {
                     rebindPending = false;
-                    Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
+                    Log.i(TAG, "forcing cluster context " + desiredCtx + " rebind (reason=" + rebindReason + ")");
                 } else if (desiredCtx == currentCtx) {
                     if (!skipWait) {
                         try {
-                            if (desiredCtx == CTX_CLUSTER)
+                            if (isClusterCtx(desiredCtx))
                                 LOCK.wait(CONTEXT_RECONCILE_MS);
                             else if (connected && activeMapMode == MAP_MODE_CARPLAY)
                                 LOCK.wait(CONTEXT_RECONCILE_MS);
@@ -648,11 +598,11 @@ public final class ScreenModule implements Module {
                     }
                     if (!pollNow) {
                         if (desiredCtx != currentCtx) continue;
-                        if (desiredCtx == CTX_CLUSTER && rebindPending) {
+                        if (isClusterCtx(desiredCtx) && rebindPending) {
                             rebindPending = false;
-                            Log.i(TAG, "forcing cluster context 72->80 rebind (reason=" + rebindReason + ")");
+                            Log.i(TAG, "forcing cluster context " + desiredCtx + " rebind (reason=" + rebindReason + ")");
                         } else {
-                            if (desiredCtx != CTX_CLUSTER) continue;
+                            if (!isClusterCtx(desiredCtx)) continue;
                             reconcileOnly = true;
                         }
                     }
@@ -678,6 +628,7 @@ public final class ScreenModule implements Module {
                         if (dm == d && desiredCtx == target && currentCtx == target) {
                             currentCtx = -1;
                             clusterActive = false;
+                            altScreenShowing = false;
                             retry = true;
                             LOCK.notifyAll();
                         }
@@ -701,26 +652,31 @@ public final class ScreenModule implements Module {
     private void applySwitch(int ctx, IDisplayManager d) {
         try {
             if (ctx != CTX_STOCK_CLUSTER) {
-                /* Coming from stock (74) or an unknown state (-1): the MOST encoder is off, so the grab
-                 * of the cluster needs a real context change via a throwaway ctx (72) + settle before
-                 * switchContext(80) will re-point the encoder. */
-                int bounce = (ctx != CTX_BOUNCE) ? CTX_BOUNCE : CTX_STOCK_CLUSTER;
-                d.switchContext(bounce, TERMINAL_CLUSTER, null);
-                try { Thread.sleep(BOUNCE_SLEEP_MS); }
-                catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-                /* Coalesce: if the desired target or the DM changed during the settle, abandon THIS
-                 * switch (cluster is on the bounce ctx) and let the loop apply the latest desired. */
-                synchronized (LOCK) {
-                    if (dm != d || desiredCtx != ctx) {
-                        currentCtx = -1;
-                        clusterActive = false;
-                        Log.i(TAG, "switch(" + ctx + ") superseded during bounce → " + desiredCtx);
-                        return;
+                int prevCtx;
+                synchronized (LOCK) { prevCtx = currentCtx; }
+                /* 80 <-> 81 while the cluster is already ours: the MOST encoder is on, so a plain context
+                 * change is enough and the throwaway stock-map bounce (a visible flash) is skipped. */
+                boolean direct = isClusterCtx(prevCtx) && isClusterCtx(ctx) && prevCtx != ctx;
+                if (!direct) {
+                    /* Coming from stock (74) or an unknown state (-1): the MOST encoder is off, so the grab
+                     * of the cluster needs a real context change via a throwaway ctx (72) + settle before
+                     * switchContext(n) will re-point the encoder. */
+                    int bounce = (ctx != CTX_BOUNCE) ? CTX_BOUNCE : CTX_STOCK_CLUSTER;
+                    d.switchContext(bounce, TERMINAL_CLUSTER, null);
+                    try { Thread.sleep(BOUNCE_SLEEP_MS); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    /* Coalesce: if the desired target or the DM changed during the settle, abandon THIS
+                     * switch (cluster is on the bounce ctx) and let the loop apply the latest desired. */
+                    synchronized (LOCK) {
+                        if (dm != d || desiredCtx != ctx) {
+                            currentCtx = -1;
+                            clusterActive = false;
+                            altScreenShowing = false;
+                            Log.i(TAG, "switch(" + ctx + ") superseded during bounce → " + desiredCtx);
+                            return;
+                        }
                     }
                 }
-                /* dc[80] must carry the effective base displayable (3 only with a live stream, else the
-                 * stock map 33) BEFORE the compositor selects it.  Outside LOCK. */
-                if (ctx == CTX_CLUSTER) syncBaseDisplayable();
                 d.switchContext(ctx, TERMINAL_CLUSTER, null);
                 boolean stillValid;
                 synchronized (LOCK) {
@@ -728,9 +684,11 @@ public final class ScreenModule implements Module {
                     if (stillValid) {
                         currentCtx = ctx;
                         clusterActive = true;
+                        altScreenShowing = (ctx == CTX_CLUSTER);
                     } else {
                         currentCtx = -1;
                         clusterActive = false;
+                        altScreenShowing = false;
                         Log.i(TAG, "switch(" + ctx + ") superseded at write → " + desiredCtx);
                     }
                 }
@@ -761,12 +719,13 @@ public final class ScreenModule implements Module {
                         currentCtx = (desiredCtx == ctx) ? ctx : -1;
                     }
                     clusterActive = false;
+                    altScreenShowing = false;
                 }
                 com.luka.carplay.cluster.ClusterLayerController.reapply();
             }
             boolean session;
             synchronized (LOCK) { session = connected; }
-            publishClusterOwnershipState(ctx, clusterActive, session);
+            publishClusterOwnershipState(ctx, clusterActive && ctx == CTX_CLUSTER, session);
             Log.i(TAG, "cluster -> ctx " + ctx + " (active=" + clusterActive + ")");
         } catch (Throwable t) {
             Log.w(TAG, "switch(" + ctx + ") failed: " + t);
@@ -774,6 +733,7 @@ public final class ScreenModule implements Module {
             synchronized (LOCK) {
                 currentCtx = -1;
                 clusterActive = false;
+                altScreenShowing = false;
                 session = connected;
             }
             publishClusterOwnershipState(CTX_STOCK_CLUSTER, false, session);

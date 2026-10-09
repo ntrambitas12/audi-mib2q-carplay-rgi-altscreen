@@ -317,6 +317,14 @@ public final class ClusterLayerController {
             }
             if (!navActive) {
                 dm.setOpacity(MANEUVER, terminal, 0);
+                /* While ctx 80/81 is applied we own the KDK backings (the "pill"): with no turn being
+                 * presented they must be hidden too.  ctx 80 is now held for the whole CarPlay session,
+                 * so a plate left at its last opacity would stay on screen between turns.  In the stock
+                 * ctx 74 the backings belong to stock and are left alone. */
+                if (com.luka.carplay.core.ScreenModule.isClusterActive()) {
+                    dm.setOpacity(BACKING_SPORT, terminal, 0);
+                    dm.setOpacity(BACKING_POPUP, terminal, 0);
+                }
                 return;
             }
             // One composition path for both stock stages; visibility is independent.

@@ -45,7 +45,7 @@ flat_dest() {
         carplay_startup.sh|carplay_monitor.sh|carplay_processes.sh|carplay_cleanup.sh) echo "$HOOKS/$1" ;;
         carplay_hook.jar) echo "$JARS/$1" ;;
         libcarplay_altscreen.so) echo "$ALTS_LIB/$1" ;;
-        carplay-alt111-mirror-display|start_vehicle.sh|stop_vehicle.sh|stream_supervisor.sh|libaltscreen_egl_fix.so) echo "$ALTS_BIN/$1" ;;
+        carplay-alt111-mirror-display|start_vehicle.sh|stop_vehicle.sh|stream_supervisor.sh) echo "$ALTS_BIN/$1" ;;
         *) return 1 ;;
     esac
 }
@@ -72,7 +72,7 @@ FLAT_ASSETS="libcarplay_hook.so maneuver_render flag_atlas.rgba carplay_startup.
 carplay_monitor.sh carplay_processes.sh carplay_cleanup.sh carplay_hook.jar"
 
 ALTS_ASSETS="libcarplay_altscreen.so carplay-alt111-mirror-display start_vehicle.sh
-stop_vehicle.sh stream_supervisor.sh libaltscreen_egl_fix.so"
+stop_vehicle.sh stream_supervisor.sh"
 
 # Payload as "source|destination" lines into $1.  Flat assets are checked by name,
 # never by walking the card.  The optional root/ tree needs find: QNX fs-dos cannot

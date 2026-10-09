@@ -242,9 +242,11 @@ public final class SteeringWheelInputModule implements Module {
             armCollapsedSelect(keyState);
 
             if (keyState == KST_PRESSED) {
-                boolean mapTab = isConfirmedMapTab();
-                Log.i(TAG, "MFW left roller PRESSED (board=" + keyboardId + " mapTab=" + mapTab + ")");
-                if (!mapTab) return;
+                /* The 5 s hold toggles the cluster map whenever a CarPlay session is connected; it needs
+                 * neither route guidance nor a VC map tab (this car has no combi manager to tell us). */
+                boolean connectedNow = ScreenModule.isConnected();
+                Log.i(TAG, "MFW left roller PRESSED (board=" + keyboardId + " connected=" + connectedNow + ")");
+                if (!connectedNow) return;
                 synchronized (SteeringWheelInputModule.this) {
                     if (currentLongPressTask != null) {
                         currentLongPressTask.cancel();
@@ -257,10 +259,6 @@ public final class SteeringWheelInputModule implements Module {
                                 synchronized (SteeringWheelInputModule.this) {
                                     if (currentLongPressTask != this || !running) return;
                                     longPressHandled = true;
-                                }
-                                if (!isConfirmedMapTab()) {
-                                    Log.i(TAG, "long press ignored: not on confirmed map tab");
-                                    return;
                                 }
                                 Log.i(TAG, "MFW left roller long press triggered (" + LONG_PRESS_DURATION_MS + " ms)");
                                 ScreenModule.onSteeringWheelLongPressed();

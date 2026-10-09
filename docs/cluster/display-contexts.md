@@ -55,10 +55,16 @@ flowchart LR
 ```
 
 - **dc[74]** `CTX_MAP_KDK` (stock) - native map + KDK; the cluster's resting state.
-- **dc[80]** `CTX_CARPLAY_NAV` = `{98, 101, 102, 33}` - our maneuver over the KDK backings over the
-  **stock native map**. z-order = array order (index 0 = front).
+- **dc[80]** `CTX_CARPLAY_NAV` = `{98, 101, 102, 3}` - our maneuver over the KDK backings over the
+  **CarPlay AltScreen video** (displayable 3, drawn by `carplay-alt111-mirror-display`). z-order = array
+  order (index 0 = front). Taken as soon as the sidecar has presented a frame
+  (`/tmp/mmi-mirror-basevideo.ready`), whether or not guidance is running.
+- **dc[81]** `CTX_CARPLAY_NAV_AUDI` = `{98, 101, 102, 33}` - the same RGI planes over the **stock native
+  map**. Used for a turn approach while the CarPlay map is not on screen (Audi map mode via the 5 s roller
+  hold, or the sidecar not presenting). Both contexts are declared at init and never edited at runtime:
+  the compositor only sees the table once, so swapping a displayable inside a live context does not work.
 
-`getMappedInternalContext` is identity on MIB2High, so `switchContext(80)` lands on exactly the
+`getMappedInternalContext` is identity on MIB2High, so `switchContext(n)` lands on exactly the
 declared context. G24 clusters have no such composition and the feature is disabled there.
 
 ## ⚙️ The switch worker (single serialized writer)
