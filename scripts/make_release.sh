@@ -114,7 +114,9 @@ if command -v zip >/dev/null 2>&1; then
 else
     PY=""; for c in python3 python; do "$c" -c 'import sys' >/dev/null 2>&1 && { PY=$c; break; }; done
     [ -n "$PY" ] || { echo "ERROR: need zip or python to create the archive" >&2; exit 1; }
-    (cd "$WORK" && "$PY" - "$ZIP" "$NAME" <<'PYEOF'
+    # a native (Windows) Python cannot open Git-Bash style /c/... paths
+    ZIP_NATIVE="$(cygpath -m "$ZIP" 2>/dev/null || echo "$ZIP")"
+    (cd "$WORK" && "$PY" - "$ZIP_NATIVE" "$NAME" <<'PYEOF'
 import os, sys, zipfile
 zip_path, root = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
